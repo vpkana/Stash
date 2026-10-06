@@ -24,3 +24,4 @@ android/capacitor-cordova-android-plugins/
 # OS
 .DS_Store
 Thumbs.db
+/.freebuff/
