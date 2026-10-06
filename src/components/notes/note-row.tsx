@@ -1,15 +1,17 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronRight, Link2, Lock, MoreHorizontal, Star } from 'lucide-react';
+import { ChevronRight, FileText, Link2, Lock, MoreHorizontal, NotebookPen, Star } from '@/components/ui/icons';
 import type { Note } from '@/db/types';
 import { checklistProgress } from '@/lib/markdown';
 import { formatRelative, pluralize } from '@/lib/format';
 import { notePlainText } from '@/lib/notes';
-import { isSealed } from '@/lib/privacy/protection';
+import { useLockState } from '@/lib/privacy/access';
 import { useLongPress } from '@/hooks/use-long-press';
 import { useVaultStore } from '@/stores/vault-store';
 import { LockedRow, useRevealLocked } from '@/components/privacy/locked-row';
+import { IdentityTile } from '@/components/ui/identity-tile';
+import { identityColor } from '@/lib/identity-color';
 import { cn } from '@/lib/utils';
 
 /**
@@ -20,9 +22,11 @@ import { cn } from '@/lib/utils';
  * attached — without becoming a card. A note that is a container reads as a
  * container; a note with content shows its opening line.
  *
- * There is no leading tile. The title and the metadata are the row; a rounded
- * square with an initial in it is the single most recognisable generated-UI
- * flourish and it told the user nothing they were not already reading.
+ * The leading tile carries the note's own identity tone, and its glyph says
+ * whether the note is a *container* — a notebook for a note with subnotes, a
+ * single page for one without. The tone is what makes the colour a label rather
+ * than decoration; the glyph is what keeps the tile from being forty identical
+ * squares in eight colours.
  */
 export interface NoteRowProps {
   note: Note;
@@ -53,10 +57,16 @@ export function NoteRow({
   // Hold a note for the same sheet its ⋯ button opens, so every list in the app
   // answers to the same gesture.
   const { handlers, consumeLongPress } = useLongPress(onShowActions);
-  // See `LockedRow`: a sealed note is a placeholder that asks for the prompt.
+  // See `LockedRow`: a protected note is a placeholder that asks for the prompt.
+  // Asked of the central access check rather than of the ciphertext, because
+  // "may I read this" and "is this encrypted on disk" are different questions
+  // and only the first one belongs in a row.
+  const access = useLockState('note', note.id);
   const { reveal, busy: revealing } = useRevealLocked();
   const checklist = React.useMemo(() => checklistProgress(note.content), [note.content]);
   const preview = React.useMemo(() => notePlainText(note.content, 80), [note.content]);
+  // Derived from the id, so a note keeps its colour for as long as it exists.
+  const tone = identityColor(note.id);
 
   const meta: string[] = [];
   if (childCount > 0) meta.push(pluralize(childCount, 'subnote'));
@@ -64,7 +74,7 @@ export function NoteRow({
   if (checklist) meta.push(`${checklist.done}/${checklist.total}`);
   meta.push(formatRelative(note.updatedAt));
 
-  if (isSealed(note)) {
+  if (access.locked) {
     return (
       <LockedRow
         kind="note"
@@ -87,6 +97,13 @@ export function NoteRow({
         {...handlers}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-4 py-3.5 text-left active:bg-surface-2"
       >
+        <IdentityTile color={tone}>
+          {childCount > 0 ? (
+            <NotebookPen size={19} strokeWidth={1.8} aria-hidden />
+          ) : (
+            <FileText size={19} strokeWidth={1.8} aria-hidden />
+          )}
+        </IdentityTile>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
             <span className="text-row min-w-0 truncate font-medium text-fg">{note.title}</span>

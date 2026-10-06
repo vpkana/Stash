@@ -6,8 +6,6 @@ import {
   type PrivacySettings,
   type RelockPolicy,
 } from '../index';
-import { isSessionLocked } from '@/lib/privacy/keyring';
-import { isSealed } from '@/lib/privacy/protection';
 import { isRelockPolicy } from '@/lib/privacy/session';
 import { isTrashed } from '@/lib/trash';
 
@@ -85,17 +83,22 @@ export async function setThemeMode(mode: ThemeMode): Promise<void> {
  * A trashed folder is dropped for the same reason a deleted one is: a destination
  * you cannot save into is not a destination.
  */
+/**
+ * The recent destinations still worth offering.
+ *
+ * A trashed folder is dropped because a destination you cannot save into is not
+ * a destination. Whether a folder is *locked* is deliberately not decided here:
+ * that is an access question, and it is answered at the point of use by the
+ * central authorization check, which knows which folders have been opened in
+ * this session. Deciding it here would need the session, and would be the second
+ * implementation of the same rule.
+ */
 export async function pruneRecentFolders(): Promise<string[]> {
   const ids = await getRecentFolderIds();
   if (ids.length === 0) return [];
   const folders = await db.folders.toArray();
   const existing = new Set(folders.filter((folder) => !isTrashed(folder)).map((folder) => folder.id));
-  let pruned = ids.filter((id) => existing.has(id));
-
-  if (isSessionLocked()) {
-    const sealed = new Set(folders.filter(isSealed).map((folder) => folder.id));
-    pruned = pruned.filter((id) => !sealed.has(id));
-  }
+  const pruned = ids.filter((id) => existing.has(id));
 
   if (pruned.length !== ids.length) await setMeta(META_KEYS.recentFolders, pruned);
   return pruned;

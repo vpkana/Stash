@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check, Link2, Search } from 'lucide-react';
+import { Check, Link2, Search } from '@/components/ui/icons';
 import type { SavedLink } from '@/db/types';
 import { displayUrl } from '@/lib/format';
 import { folderPathLabel } from '@/lib/tree';
@@ -32,6 +32,7 @@ const RESULT_LIMIT = 120;
 export function LinkPickerSheet({ open, onClose, onPick, attachedIds, title = 'Attach a link' }: LinkPickerSheetProps) {
   const links = useVaultStore((state) => state.links);
   const folders = useVaultStore((state) => state.folders);
+  const hidden = useVaultStore((state) => state.hidden);
   const [query, setQuery] = React.useState('');
 
   const attached = React.useMemo(() => new Set(attachedIds ?? []), [attachedIds]);
@@ -45,7 +46,10 @@ export function LinkPickerSheet({ open, onClose, onPick, attachedIds, title = 'A
   useBackDismiss(open, close);
 
   const results = React.useMemo(() => {
-    const active = links.filter((link) => !link.isArchived);
+    // A picker is a listing, and a listing never offers protected content. A link
+    // the session cannot read is not something to attach: attaching it would put
+    // a reference to private content inside an ordinary note.
+    const active = links.filter((link) => !link.isArchived && !hidden.links.has(link.id));
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     const filtered =
       tokens.length === 0
@@ -55,7 +59,7 @@ export function LinkPickerSheet({ open, onClose, onPick, attachedIds, title = 'A
             return tokens.every((token) => haystack.includes(token));
           });
     return filtered.sort((a, b) => b.createdAt - a.createdAt).slice(0, RESULT_LIMIT);
-  }, [links, query]);
+  }, [links, query, hidden]);
 
   return (
     <Sheet open={open} onOpenChange={(next) => !next && close()}>

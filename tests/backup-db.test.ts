@@ -233,11 +233,15 @@ describe('export, uninstall, import', () => {
     await importText(built.text!, 'replace');
 
     expect(await structure()).toEqual(before);
-    // The lock flags travelled, so reconciliation sealed the items again: the
-    // database is not left holding the readable copy the file contained.
-    const personal = (await readVaultRaw()).folders.find((row) => row.name === 'Personal');
-    expect(personal).toBeUndefined();
-    expect((await readVaultRaw()).folders.some((row) => isSealed(row) && row.isLocked)).toBe(true);
+    // The lock flags travelled, so reconciliation sealed the *content* again: the
+    // database is not left holding the readable copy the file contained. The
+    // folder row keeps its name — the label is not the secret — but the links
+    // inside it go back to being ciphertext.
+    const restored = await readVaultRaw();
+    const personal = restored.folders.find((row) => row.name === 'Personal');
+    expect(personal?.isLocked).toBe(true);
+    expect(restored.links.some((row) => isSealed(row))).toBe(true);
+    expect(JSON.stringify(restored.links)).not.toContain('example.com/c');
   });
 
   it('keeps favourites, archive state, tags and note references', async () => {
@@ -327,9 +331,11 @@ describe('locked content', () => {
 
     const built = await build('sealed');
 
-    // What is stored is ciphertext, and the file carries it as-is.
-    expect(isSealed((await db.folders.get(personal)) ?? {})).toBe(true);
-    expect(built.text).not.toContain('Settlement');
+    // What is stored is ciphertext, and the file carries it as-is. The folder's
+    // own name is not part of that: it is the label, and it travels in the clear
+    // so the restored vault can still say which folder is which.
+    expect(isSealed((await db.folders.get(personal)) ?? {})).toBe(false);
+    expect(isSealed((await db.links.get(secret)) ?? {})).toBe(true);
     expect(built.text).not.toContain('secret.example.com');
     expect(built.text).not.toContain('Therapy');
     expect(built.text).not.toContain('What I said on Tuesday');
@@ -351,7 +357,11 @@ describe('locked content', () => {
     // Until it is unlocked the restored rows are ciphertext, exactly as they
     // were on the original device.
     const sealedBefore = await readVaultRaw();
-    expect(sealedBefore.folders.find((row) => row.id === personal)?.name).toBe('');
+    // The folder's label survives the round trip — it is not the secret — while
+    // the content behind it is still ciphertext, exactly as on the source device.
+    expect(sealedBefore.folders.find((row) => row.id === personal)?.name).toBe('Personal');
+    expect(sealedBefore.folders.find((row) => row.id === personal)?.isLocked).toBe(true);
+    expect(isSealed(sealedBefore.links.find((row) => row.id === secret) ?? {})).toBe(true);
     expect(sealedBefore.notes.find((row) => row.id === privateNote)?.title).toBe('');
 
     // The original passcode opens the restored vault.
@@ -394,6 +404,7 @@ describe('locked content', () => {
   it('refuses a readable export while the session is locked, rather than shipping ciphertext', async () => {
     await createKeyring(PASSCODE);
     const personal = await mustFolder('Personal');
+    await mustLink('https://secret.example.com/hidden', personal);
     await setFolderLocked(personal, true);
     forgetVaultKey();
 

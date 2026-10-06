@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Fingerprint, Lock, LockKeyhole, Smartphone, Unlock } from 'lucide-react';
+import { AlertTriangle, Fingerprint, Lock, LockKeyhole, Smartphone, Unlock } from '@/components/ui/icons';
 import { pluralize } from '@/lib/format';
 import { devicePromptName } from '@/lib/privacy/auth';
 import { usePrivacyStore } from '@/stores/privacy-store';
@@ -126,12 +126,13 @@ export function PrivacySettings() {
                   ? hasLocks
                     ? `${pluralize(lockedCounts.notes, 'note')}, ${pluralize(lockedCounts.links, 'link')} and ${pluralize(lockedCounts.folders, 'folder')} protected · device lock only`
                     : 'No items are locked yet. Lock a folder, note or link to use this.'
-                  : 'Lock folders, notes and links so they are encrypted at rest. They open with your device lock and nothing else.'}
+                  : 'Turn this on, then lock any folder you want kept private. Its contents are encrypted at rest and open one folder at a time, with your device lock.'}
               </p>
               {keyringPresent ? (
                 <p className="mt-1.5 text-meta leading-relaxed text-subtle">
-                  Locked items hide their contents — a name, a title, an address — and stay that way until you tap one
-                  and pass the prompt. An unlock lasts for the session: it ends when you switch tabs or leave Stash.
+                  A protected folder’s contents are encrypted at rest and withheld until you ask for them: opening the
+                  folder asks for your device lock, and passing it opens that folder only. Opening Stash, browsing,
+                  searching and saving links never ask for anything. Access ends when you switch tabs or leave Stash.
                 </p>
               ) : null}
             </div>

@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ExternalLink, FolderInput, Plus } from 'lucide-react';
+import { ExternalLink, FolderInput, Plus } from '@/components/ui/icons';
 import type { DuplicateMatch } from '@/db/repos/links';
 import { formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';

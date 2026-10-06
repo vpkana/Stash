@@ -17,7 +17,7 @@ import {
   Tag as TagIcon,
   Trash2,
   Unlock,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { useRouter } from 'next/navigation';
 import type { Note, SavedLink } from '@/db/types';
 import { destinationLabel, INBOX_DESTINATION, folderDestination } from '@/lib/destination';

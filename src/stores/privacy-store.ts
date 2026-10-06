@@ -18,7 +18,7 @@ import {
   unlockWithPasscode,
 } from '@/lib/privacy/keyring';
 import { getSecureStore } from '@/lib/privacy/secure-store';
-import { unsealEverything } from '@/lib/privacy/reconcile';
+import { reconcileProtection as reconcile, unsealEverything } from '@/lib/privacy/reconcile';
 import { applyScreenPrivacy } from '@/lib/privacy/screen';
 import { shouldLockOnTabChange, shouldRelock } from '@/lib/privacy/session';
 
@@ -32,12 +32,18 @@ import { shouldLockOnTabChange, shouldRelock } from '@/lib/privacy/session';
  * cannot reach it. `unlocked` here is a mirror for rendering, and the authority
  * is always `isSessionLocked()`.
  *
- * A locked session does **not** mean the app is behind a lock screen. Stash has
- * no password of its own and never asks for one to open: the app opens, and every
- * locked folder, note and link is simply not readable — it is ciphertext with its
- * fields blanked, shown as a locked row. Tapping one of those rows is the only
- * thing that raises the system prompt, and passing it unlocks the whole vault for
- * the session, so the other locked folders open too.
+ * Stash has no password of its own and no lock screen. The app always opens, and
+ * nothing in it is gated: what is protected is *content*, and the only thing that
+ * ever raises the system prompt is the user trying to cross into a protected
+ * folder. Launching, browsing Home, searching, saving a link or arriving from the
+ * Android share sheet all happen with no prompt at all, however many locked
+ * folders the vault contains.
+ *
+ * `grantedRoots` is the access model, and it is per folder. Passing the prompt
+ * for `Private` opens `Private` and its descendants and leaves every other locked
+ * folder exactly as closed as it was. The vault key is one key — so the seal is
+ * all-or-nothing at rest — but *access* is decided one boundary at a time, which
+ * is what makes the lock a property of a folder rather than of the app.
  *
  * The session is deliberately short-lived: it ends on the next tab change and the
  * moment the app stops being visible (see `handleBackground` / `lockOnTabChange`).
@@ -56,6 +62,23 @@ export type RevealKind = 'folder' | 'note' | 'link';
 export interface RevealRequest {
   kind: RevealKind;
   id: string;
+  /**
+   * The locked node this request is asking to cross into.
+   *
+   * Carried with the request because it is the thing the gate grants on success:
+   * one vault key exists, so "unlock" is technically all-or-nothing, but what the
+   * user asked for is *this* folder, and granting anything else would open content
+   * they never asked to see.
+   */
+  root: string | null;
+}
+
+/** What a caller is asking for when it wants to see a protected item. */
+export interface AccessRequest {
+  kind: RevealKind;
+  id: string;
+  /** `lockRootOf(protection, kind, id)`, or `null` when nothing protects it. */
+  root: string | null;
 }
 
 export interface PrivacyState {
@@ -85,6 +108,18 @@ export interface PrivacyState {
    * that just happened or is the user moving on (see `lockOnTabChange`).
    */
   unlockedAt: number | null;
+  /**
+   * Which locked folders have been opened in this session.
+   *
+   * This is the whole of Stash's access model, and it is deliberately a *set*:
+   * passing the prompt for `Private` opens `Private` and everything inside it,
+   * and leaves `Banking` — a different locked folder — exactly as closed as it
+   * was. There is no app-wide unlock, so a locked folder somewhere in the vault
+   * can never be the reason a capture, a search or a launch asks for anything.
+   *
+   * A new array on every grant, so a subscriber can compare by reference.
+   */
+  grantedRoots: string[];
   /** Explanation of the last failed unlock, shown on the gate. */
   message: string | null;
   /**
@@ -124,13 +159,26 @@ export interface PrivacyState {
    * unrecoverable. Nothing in the app creates a passcode any more.
    */
   unlock: (passcode: string) => Promise<ActionResult>;
-  unlockWithBiometrics: () => Promise<ActionResult>;
   /**
-   * Ask to see a locked item: prompt the device if it can, otherwise queue the
-   * request so the gate opens for it. Resolves `ok` when the vault came back
-   * unlocked, which is the caller's signal to continue with what it was doing.
+   * Pass the system prompt and open one lock boundary.
+   *
+   * `root` is the locked node the user asked for. Omit it to open the queued
+   * reveal request instead, which is what the gate's own button does.
    */
-  requestReveal: (kind: RevealKind, id: string) => Promise<ActionResult>;
+  unlockWithBiometrics: (root?: string | null) => Promise<ActionResult>;
+  /**
+   * Ask to cross a lock boundary: prompt the device if it can, otherwise queue
+   * the request so the gate opens for it. Resolves `ok` only when access was
+   * actually granted, which is the caller's signal to continue with what it was
+   * doing — and the reason a failed prompt opens nothing.
+   */
+  requestAccess: (request: AccessRequest) => Promise<ActionResult>;
+  /** Remember that one locked node has been opened for this session. */
+  grant: (root: string) => void;
+  /** End every folder access at once. Called on lock, tab change and background. */
+  clearGrants: () => void;
+  /** Bring the database's encryption back in step with the lock flags. */
+  reconcile: () => Promise<void>;
   clearReveal: () => void;
   lock: () => void;
   /**
@@ -192,6 +240,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   deviceUnlockReady: false,
   backgroundedAt: null,
   unlockedAt: null,
+  grantedRoots: [],
   message: null,
   revealRequest: null,
   busy: false,
@@ -233,8 +282,11 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       deviceUnlockReady,
       unlocked,
       // Nothing was unlocked by a person here: a vault with no keyring starts
-      // open because there is nothing to protect, not because it was opened.
+      // open because there is nothing to protect, not because it was opened. No
+      // folder has been crossed into either, which is why the grants start empty
+      // even when the key is present.
       unlockedAt: null,
+      grantedRoots: [],
     });
     syncScreenPrivacy(settings.secureScreen, unlocked);
   },
@@ -262,9 +314,34 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       unlocked: !keyring,
       backgroundedAt: null,
       unlockedAt: null,
+      grantedRoots: [],
+      // A queued reveal belongs to the vault that was just replaced. Carrying it
+      // over would raise the gate for an item that may not exist any more.
+      revealRequest: null,
       message: null,
     });
     syncScreenPrivacy(settings.secureScreen, !keyring);
+  },
+
+  /**
+   * Settle the database's encryption against the lock flags, once a key exists.
+   *
+   * Called on every path where the vault key becomes available. It is what keeps
+   * "locked means sealed on disk" true for a vault this build did not write —
+   * most visibly, folder names that an earlier build stored as ciphertext are
+   * rewritten in the clear here, because a folder name is now the label on the
+   * lock rather than part of the secret.
+   *
+   * Never allowed to fail the unlock: the key is already in memory and the vault
+   * is already readable, so a reconciliation problem is a deferred tidy-up, not a
+   * reason to refuse the user.
+   */
+  reconcile: async () => {
+    try {
+      await reconcile();
+    } catch (error) {
+      console.warn('[stash] could not settle the lock state after unlocking', error);
+    }
   },
 
   refreshCapabilities: async () => {
@@ -370,6 +447,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       passcodeSet: false,
       unlocked: true,
       unlockedAt: null,
+      grantedRoots: [],
       deviceUnlockReady: false,
       message: null,
     });
@@ -394,8 +472,10 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       return { ok: false, message: 'That passcode did not match.' };
     }
     const settings = get().settings;
-    // The passcode path clears a queued reveal too, so the gate steps aside the
-    // moment the item behind it becomes readable.
+    // The passcode path opens the same boundary as the device path, and clears a
+    // queued reveal too, so the gate steps aside the moment the item behind it
+    // becomes readable.
+    const opened = get().revealRequest?.root ?? null;
     set({
       busy: false,
       unlocked: true,
@@ -404,15 +484,36 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       message: null,
       revealRequest: null,
     });
+    if (opened) get().grant(opened);
     syncScreenPrivacy(settings.secureScreen, true);
+    await get().reconcile();
     return { ok: true };
   },
 
-  requestReveal: async (kind, id) => {
-    // Asked of the session and of the keyring rather than of the cached flags:
-    // an import can replace the keyring underneath us, and "is there anything to
-    // unlock" is a fact about the key, not about the last render.
-    if (!isSessionLocked() || !(await hasKeyring())) return { ok: true };
+  /**
+   * Cross a lock boundary.
+   *
+   * The order of the checks is the whole design:
+   *
+   *  1. nothing protects this item → there is no boundary, so there is nothing to
+   *     ask. This is the branch that keeps a share, a launch, a search and an
+   *     ordinary save silent no matter how many locked folders exist.
+   *  2. this exact root is already open in this session and the key is here → the
+   *     user is moving around inside a folder they already unlocked.
+   *  3. no keyring exists at all → nothing is sealed, so nothing can be withheld.
+   *  4. otherwise prompt. A cancelled prompt opens nothing and queues the gate so
+   *     the refusal is explained rather than silent.
+   */
+  requestAccess: async ({ kind, id, root }) => {
+    if (!root) return { ok: true };
+    if (!isSessionLocked() && get().grantedRoots.includes(root)) return { ok: true };
+    // Asked of the keyring rather than of the cached flag: an import can replace
+    // the keyring underneath us, and "is there anything to unlock" is a fact about
+    // the key, not about the last render.
+    if (!(await hasKeyring())) {
+      get().grant(root);
+      return { ok: true };
+    }
 
     // The device prompt first, because it is one deliberate act with nothing to
     // type. A cancelled prompt is *not* an error here: it just means the gate
@@ -420,18 +521,29 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     if (await isDeviceUnlockReady()) {
       const authenticator = await getDeviceAuthenticator();
       if (await authenticator.isAvailable()) {
-        const result = await get().unlockWithBiometrics();
+        const result = await get().unlockWithBiometrics(root);
         if (result.ok) return result;
       }
     }
 
-    set({ revealRequest: { kind, id } });
-    return { ok: false, message: 'Unlock to open the locked item you tapped.' };
+    set({ revealRequest: { kind, id, root } });
+    return { ok: false, message: 'Unlock to open the protected folder you tapped.' };
+  },
+
+  grant: (root) => {
+    const current = get().grantedRoots;
+    if (current.includes(root)) return;
+    set({ grantedRoots: [...current, root] });
+  },
+
+  clearGrants: () => {
+    if (get().grantedRoots.length === 0) return;
+    set({ grantedRoots: [] });
   },
 
   clearReveal: () => set({ revealRequest: null }),
 
-  unlockWithBiometrics: async () => {
+  unlockWithBiometrics: async (root) => {
     set({ busy: true, message: null });
     const authenticator = await getDeviceAuthenticator();
 
@@ -457,8 +569,10 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     }
 
     const settings = get().settings;
+    // The boundary the user actually asked to cross is the boundary that opens.
     // A queued reveal is satisfied by the unlock it was waiting for: whatever
     // asked for it re-renders with real data one refresh later.
+    const opened = root ?? get().revealRequest?.root ?? null;
     set({
       busy: false,
       unlocked: true,
@@ -467,28 +581,33 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       message: null,
       revealRequest: null,
     });
+    if (opened) get().grant(opened);
     syncScreenPrivacy(settings.secureScreen, true);
+    // A key exists now, so the database can be brought back in step with the lock
+    // flags — which is also the migration for a vault written by an earlier build.
+    await get().reconcile();
     return { ok: true };
   },
 
   lock: () => {
-    // Without a keyring there is nothing to lock: no key exists, so there is no
-    // session to end, and locking would only produce a gate with no way through.
-    if (!get().keyringPresent) return;
-    // Drop the key. That is the entire mechanism — no plaintext is hidden behind
-    // a boolean, the material to decrypt simply stops existing in this process.
+    // No keyring and nothing open means there is no session to end, and locking
+    // would only produce a gate with no way through.
+    if (!get().keyringPresent && get().grantedRoots.length === 0) return;
+    // Drop the key. That is the mechanism behind the seal — no plaintext is hidden
+    // behind a boolean, the material to decrypt simply stops existing here — and
+    // drop the grants, which is the mechanism behind the boundary.
     forgetVaultKey();
     const settings = get().settings;
-    set({ unlocked: false, unlockedAt: null, backgroundedAt: null, message: null });
+    set({ unlocked: false, unlockedAt: null, backgroundedAt: null, grantedRoots: [], message: null });
     syncScreenPrivacy(settings.secureScreen, false);
   },
 
   lockOnTabChange: (now = Date.now()) => {
     const state = get();
-    // Nothing to end when there is no keyring (nothing is protected) or when the
-    // session is already locked. The reveal grace is what keeps an unlock and the
+    // Nothing to end when there is no keyring (nothing is protected) and nothing
+    // has been opened. The reveal grace is what keeps an unlock and the
     // navigation it caused from cancelling each other out.
-    if (!state.keyringPresent || !state.unlocked) return;
+    if (!state.keyringPresent || (!state.unlocked && state.grantedRoots.length === 0)) return;
     if (!shouldLockOnTabChange(state.unlockedAt, now)) return;
     get().lock();
   },
@@ -508,7 +627,8 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
    * earlier build still loads, not to make this decision any more.
    */
   handleBackground: (now = Date.now()) => {
-    if (!get().unlocked) return;
+    const state = get();
+    if (!state.unlocked && state.grantedRoots.length === 0) return;
     set({ backgroundedAt: now });
     get().lock();
   },
@@ -537,6 +657,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       passcodeSet: false,
       unlocked: true,
       unlockedAt: null,
+      grantedRoots: [],
       deviceUnlockReady: false,
       message: null,
     });

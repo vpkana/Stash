@@ -68,11 +68,16 @@ export function relockPolicyLabel(policy: RelockPolicy): string {
 /**
  * Whether the unlock prompt is on screen.
  *
- * There is exactly one reason it ever is: the user tapped something locked and the
- * system prompt has not answered for it. Stash has no password of its own and no
- * lock screen, so a cold start, a tab change, the app coming back to the
+ * There is exactly one reason it ever is: the user tried to cross a lock boundary
+ * and the system prompt did not answer for it. Stash has no password of its own
+ * and no lock screen, so a cold start, a tab change, the app coming back to the
  * foreground and a share arriving all leave this `false` — the app is simply
- * opened, and locked items are unreadable inside it.
+ * opened, and protected content stays unreadable inside it.
+ *
+ * Note what is **not** a condition: whether the vault key happens to be in memory.
+ * Access is per folder, so being inside one open boundary says nothing about the
+ * next one; a refusal on *this* boundary has to be visible even when the key is
+ * present, or the second locked folder the user taps would silently do nothing.
  *
  * Separate from the component that draws it so the rule can be pinned by a test
  * rather than by reading a conditional: "the app never asks for a password to
@@ -81,10 +86,9 @@ export function relockPolicyLabel(policy: RelockPolicy): string {
 export function shouldPromptForReveal(state: {
   ready: boolean;
   keyringPresent: boolean;
-  unlocked: boolean;
   hasRevealRequest: boolean;
 }): boolean {
-  return state.ready && state.keyringPresent && !state.unlocked && state.hasRevealRequest;
+  return state.ready && state.keyringPresent && state.hasRevealRequest;
 }
 
 /**

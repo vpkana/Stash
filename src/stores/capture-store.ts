@@ -14,6 +14,7 @@ import {
 } from '@/lib/destination';
 import { parseShareToDraft } from '@/lib/share/parse';
 import { labelForDomain, type IncomingShare } from '@/lib/share/types';
+import { canAccessFolder, requireFolderAccess } from '@/lib/privacy/access';
 import { useVaultStore } from './vault-store';
 
 /**
@@ -47,7 +48,7 @@ export interface CaptureDraft {
   receivedAt: number;
 }
 
-export type SaveFailureReason = 'invalid-url' | 'duplicate' | 'unavailable';
+export type SaveFailureReason = 'invalid-url' | 'duplicate' | 'unavailable' | 'locked';
 
 export interface SaveOutcome {
   ok: boolean;
@@ -77,6 +78,8 @@ interface CaptureState {
   setDraftField: (field: 'url' | 'title' | 'note', value: string) => void;
   setSaveOtherUrls: (value: boolean) => void;
   selectDestination: (selection: DestinationSelection) => void;
+  /** Selects a destination, asking for access first when it is protected. */
+  chooseDestination: (selection: DestinationSelection) => Promise<boolean>;
   setShowCreateFolder: (value: boolean) => void;
   recheckDuplicates: () => Promise<void>;
   acknowledgeDuplicate: () => void;
@@ -135,10 +138,20 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       return;
     }
 
+    /*
+     * The note is pre-filled from whatever the source app already told us.
+     *
+     * A share usually arrives with a title (YouTube sends the video name, Chrome
+     * the page title), and asking the user to retype it would be busywork. It
+     * lands in the *note* rather than staying only in `title` because the note is
+     * the field the user owns: it is pre-filled for them, editable by them, and
+     * never rewritten afterwards. `title` is kept alongside as provenance — what
+     * the source claimed — so the two never have to be conflated.
+     */
     const draft: CaptureDraft = {
       url: parsed.draft.url,
       title: parsed.draft.title ?? '',
-      note: parsed.draft.note ?? '',
+      note: parsed.draft.note ?? parsed.draft.title ?? '',
       rawText: parsed.share.rawText,
       domain: parsed.draft.domain,
       otherUrls: parsed.draft.otherUrls,
@@ -200,6 +213,21 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
 
   selectDestination: (selection) => set({ destination: selection, showCreateFolder: false }),
 
+  /**
+   * Choose a destination, crossing a lock boundary only if the choice needs it.
+   *
+   * This is the one place a share can raise the system prompt, and it does so for
+   * exactly one reason: the user picked a protected folder. Choosing the Inbox, an
+   * ordinary folder, or creating a new one never asks for anything.
+   */
+  chooseDestination: async (selection) => {
+    if (selection.kind === 'folder' && selection.folderId) {
+      if (!(await requireFolderAccess(selection.folderId))) return false;
+    }
+    set({ destination: selection, showCreateFolder: false });
+    return true;
+  },
+
   setShowCreateFolder: (value) => set({ showCreateFolder: value }),
 
   recheckDuplicates: async () => {
@@ -232,6 +260,21 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
 
     const folderId = destinationFolderId(destination);
     const isFavorite = destinationIsFavorite(destination);
+
+    // Write-time authorization, not just a picker guard.
+    //
+    // The destination could have been chosen before the folder was locked, or
+    // restored from a recent-destinations list that predates the lock. Filing a
+    // link into a folder the session cannot read would be a silent bypass of the
+    // boundary — and because a link saved there is immediately sealed, it would
+    // also hand the user a link they could not find again.
+    if (folderId && !canAccessFolder(folderId)) {
+      const granted = await requireFolderAccess(folderId);
+      if (!granted) {
+        set({ status: 'open' });
+        return { ok: false, reason: 'locked' };
+      }
+    }
 
     const vault = useVaultStore.getState();
     const link = await vault.saveLink({
@@ -280,6 +323,13 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   moveExisting: async (linkId) => {
     const { destination } = get();
     const folderId = destinationFolderId(destination);
+    if (folderId && !canAccessFolder(folderId)) {
+      const granted = await requireFolderAccess(folderId);
+      if (!granted) {
+        set({ status: 'open' });
+        return { ok: false, reason: 'locked' };
+      }
+    }
     await useVaultStore.getState().moveLink(linkId, folderId);
     if (destinationIsFavorite(destination)) {
       await useVaultStore.getState().toggleLinkFavorite(linkId, true);
@@ -311,7 +361,10 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
 function defaultDestination(): DestinationSelection {
   const { folders, recentFolderIds } = useVaultStore.getState();
   const known = new Set(folders.map((folder) => folder.id));
-  const recent = recentFolderIds.find((id) => known.has(id));
+  // A protected folder is skipped rather than pre-selected. Preselecting one
+  // would put a lock prompt in front of a share the user never asked to unlock
+  // anything for, and a share must never be the reason a password is requested.
+  const recent = recentFolderIds.find((id) => known.has(id) && canAccessFolder(id));
   return recent ? folderDestination(recent) : INBOX_DESTINATION;
 }
 

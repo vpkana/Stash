@@ -8,10 +8,13 @@
     the 108-unit adaptive canvas so the mark fills the 66-unit safe zone — the
     region every launcher mask (circle, squircle, teardrop) is guaranteed to keep.
 
-    The colour is `brand_cream`, the same value as `--brand-cream` in
-    `src/app/globals.css`; the tile behind it is `brand_ink`. The icon is the one
-    surface that is the same in light and dark mode, so neither value changes
-    between `values/` and `values-night/`.
+    The colour is `brand_cream`, the same value as the `brand.cream` custom
+    property in `src/app/globals.css`; the tile behind it is `brand_ink`. The icon
+    is the one surface that is the same in light and dark mode, so neither value
+    changes between the day and night resource sets.
+
+    Note for editors: this is an XML comment, so a doubled hyphen cannot appear
+    inside it. Writing a CSS custom property out in full here will not compile.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -27,7 +30,7 @@
             android:translateX="-256"
             android:translateY="-254">
             <path
-                android:fillColor="#F6F1E7"
+                android:fillColor="#FFFFFF"
                 android:pathData="M 204 140 H 308 Q 348 140 348 180 V 352 Q 348 368 336 368 L 268 322 Q 256 317 244 322 L 176 368 Q 164 368 164 352 V 180 Q 164 140 204 140 Z" />
         </group>
     </group>

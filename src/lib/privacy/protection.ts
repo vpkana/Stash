@@ -4,20 +4,28 @@ import { decryptJson, encryptJson, isEncryptedPayload } from './crypto';
 /**
  * What "locked" means in Stash.
  *
- * Two independent things are true of a locked item, and both matter:
+ * A locked folder is an **access boundary**, not a presentation state. Two
+ * independent things are true of anything inside one, and both matter:
  *
- *  1. It is **sealed**. Its secret fields are replaced by AES-GCM ciphertext in
+ *  1. It is **sealed**. The secret fields are replaced by AES-GCM ciphertext in
  *     the database, so nothing sensitive survives in IndexedDB at rest. Sealing
- *     is not a UI trick: with the session locked and the key discarded, the
- *     plaintext genuinely is not present to be shown, indexed or leaked.
- *  2. It is **hidden** while the session is locked — from search, recents,
- *     previews, pickers, counts and snippets.
+ *     is not a UI trick: with no key in memory the plaintext genuinely is not
+ *     present to be shown, indexed or leaked.
+ *  2. It is **denied** until the person crosses that boundary. Access is granted
+ *     per locked folder — see {@link canAccess} — and everything beneath a locked
+ *     folder is protected exactly as if it had been locked itself.
  *
- * A folder lock is *inherited*: everything beneath a locked folder is protected
- * exactly as if it had been locked itself. Inheritance is derived rather than
- * stored, so moving an item into or out of a locked folder cannot leave a
- * record that is hidden but readable, or readable but hidden. Deriving it means
- * the two sets below are always consistent with each other by construction.
+ * Inheritance is derived rather than stored, so moving an item into or out of a
+ * locked folder cannot leave a record that is hidden but readable, or readable
+ * but hidden. Every protected id also carries its **lock root**: the locked node
+ * it belongs to. Granting that root is what unlocks it, and only that root, which
+ * is what makes locking per-folder rather than per-app.
+ *
+ * A folder's *name* is deliberately not sealed. The name is the label on the
+ * door, not what is behind it: without it a locked folder is indistinguishable
+ * from every other locked folder — including in the destination picker, where
+ * the user has to say which one a link is going into. What is sealed is the
+ * content: links (address, title, note, snippet) and notes (title, body).
  */
 
 /** Ids that are locked, either in their own right or through an ancestor. */
@@ -25,16 +33,52 @@ export interface Protection {
   folders: Set<string>;
   notes: Set<string>;
   links: Set<string>;
+  /**
+   * For every protected id in `folders`, the locked folder that protects it.
+   *
+   * A directly locked folder is its own root; a folder five levels beneath one
+   * carries that ancestor's id. Access is decided on the root, so unlocking
+   * `Private` opens `Private` and everything inside it, and nothing else.
+   */
+  folderRoots: Map<string, string>;
+  noteRoots: Map<string, string>;
+  linkRoots: Map<string, string>;
 }
 
 export const EMPTY_PROTECTION: Protection = {
   folders: new Set(),
   notes: new Set(),
   links: new Set(),
+  folderRoots: new Map(),
+  noteRoots: new Map(),
+  linkRoots: new Map(),
 };
+
+export type ProtectedKind = 'folder' | 'note' | 'link';
 
 export function hasAnyProtection(protection: Protection): boolean {
   return protection.folders.size > 0 || protection.notes.size > 0 || protection.links.size > 0;
+}
+
+/**
+ * Walk from `id` up through `parentOf`, returning the first locked node.
+ *
+ * Cycles — which can only come from hand-edited or imported data — terminate
+ * instead of hanging, and a node that is not protected returns `null`.
+ */
+function rootOf(
+  id: string,
+  parentOf: ReadonlyMap<string, string | null>,
+  locked: ReadonlySet<string>,
+): string | null {
+  const guard = new Set<string>();
+  let cursor: string | null = id;
+  while (cursor && !guard.has(cursor)) {
+    guard.add(cursor);
+    if (locked.has(cursor)) return cursor;
+    cursor = parentOf.get(cursor) ?? null;
+  }
+  return null;
 }
 
 /**
@@ -42,8 +86,7 @@ export function hasAnyProtection(protection: Protection): boolean {
  *
  * Each family is walked root-down using the parent links the vault already
  * stores (`parentId`, `parentNoteId`), so a folder five levels under a locked
- * folder is protected without the user having to lock it too. Cycles — which can
- * only come from hand-edited or imported data — terminate instead of hanging.
+ * folder is protected without the user having to lock it too.
  */
 export function computeProtection(
   folders: readonly Folder[],
@@ -57,17 +100,12 @@ export function computeProtection(
   for (const folder of folders) folderParent.set(folder.id, folder.parentId);
 
   const protectedFolders = new Set<string>();
+  const folderRoots = new Map<string, string>();
   for (const folder of folders) {
-    let cursor: string | null = folder.id;
-    const guard = new Set<string>();
-    while (cursor && !guard.has(cursor)) {
-      guard.add(cursor);
-      if (lockedFolders.has(cursor)) {
-        protectedFolders.add(folder.id);
-        break;
-      }
-      cursor = folderParent.get(cursor) ?? null;
-    }
+    const root = rootOf(folder.id, folderParent, lockedFolders);
+    if (!root) continue;
+    protectedFolders.add(folder.id);
+    folderRoots.set(folder.id, root);
   }
 
   const lockedNotes = new Set<string>();
@@ -77,17 +115,12 @@ export function computeProtection(
   for (const note of notes) noteParent.set(note.id, note.parentNoteId);
 
   const protectedNotes = new Set<string>();
+  const noteRoots = new Map<string, string>();
   for (const note of notes) {
-    let cursor: string | null = note.id;
-    const guard = new Set<string>();
-    while (cursor && !guard.has(cursor)) {
-      guard.add(cursor);
-      if (lockedNotes.has(cursor)) {
-        protectedNotes.add(note.id);
-        break;
-      }
-      cursor = noteParent.get(cursor) ?? null;
-    }
+    const root = rootOf(note.id, noteParent, lockedNotes);
+    if (!root) continue;
+    protectedNotes.add(note.id);
+    noteRoots.set(note.id, root);
   }
 
   // A link is protected when it is locked itself, or when it lives anywhere
@@ -95,18 +128,77 @@ export function computeProtection(
   // links are owned by folders, and the same link may legitimately be visible in
   // the Library while a private note happens to reference it.
   const protectedLinks = new Set<string>();
+  const linkRoots = new Map<string, string>();
   for (const link of links) {
     if (link.isLocked) {
       protectedLinks.add(link.id);
+      linkRoots.set(link.id, link.id);
       continue;
     }
-    if (link.folderId && protectedFolders.has(link.folderId)) protectedLinks.add(link.id);
+    const root = link.folderId ? folderRoots.get(link.folderId) : undefined;
+    if (!root) continue;
+    protectedLinks.add(link.id);
+    linkRoots.set(link.id, root);
   }
 
-  return { folders: protectedFolders, notes: protectedNotes, links: protectedLinks };
+  return {
+    folders: protectedFolders,
+    notes: protectedNotes,
+    links: protectedLinks,
+    folderRoots,
+    noteRoots,
+    linkRoots,
+  };
 }
 
-/** Ids a locked session must not reveal. Deliberately empty when unlocked. */
+function rootsFor(protection: Protection, kind: ProtectedKind): ReadonlyMap<string, string> {
+  if (kind === 'folder') return protection.folderRoots;
+  if (kind === 'note') return protection.noteRoots;
+  return protection.linkRoots;
+}
+
+function idsFor(protection: Protection, kind: ProtectedKind): ReadonlySet<string> {
+  if (kind === 'folder') return protection.folders;
+  if (kind === 'note') return protection.notes;
+  return protection.links;
+}
+
+/**
+ * The locked node that protects `id`, or `null` when nothing does.
+ *
+ * This is the value a caller grants access to. It is a *folder* id for content
+ * inside a locked folder and the item's own id for an individually locked link
+ * or note, so one mechanism covers both without a second concept.
+ */
+export function lockRootOf(protection: Protection, kind: ProtectedKind, id: string): string | null {
+  return rootsFor(protection, kind).get(id) ?? null;
+}
+
+/**
+ * The single authorization rule for the whole app.
+ *
+ * Unprotected → always accessible. Protected → accessible only while the locked
+ * node that guards it has been opened in this session. There is no third state:
+ * nothing here blurs, hides or greys anything, it answers whether the content
+ * may be read at all.
+ *
+ * Every route into protected content — opening a folder, a deep link, search,
+ * recents, favourites, the share destination picker, navigation restoration —
+ * goes through this, so a screen added later cannot get the rule subtly
+ * different from the one already in place.
+ */
+export function canAccess(
+  protection: Protection,
+  granted: ReadonlySet<string>,
+  kind: ProtectedKind,
+  id: string,
+): boolean {
+  if (!idsFor(protection, kind).has(id)) return true;
+  const root = lockRootOf(protection, kind, id);
+  return root !== null && granted.has(root);
+}
+
+/** Ids a call must not treat as content right now. */
 export interface HiddenIds {
   folders: ReadonlySet<string>;
   notes: ReadonlySet<string>;
@@ -122,21 +214,96 @@ const EMPTY_HIDDEN: HiddenIds = {
 /**
  * The ids to withhold from every listing surface.
  *
- * This is the single choke point for the entire "do not leak" requirement: when
- * the session is locked, protected ids are hidden; when it is unlocked they are
- * ordinary items again. Deriving it from {@link Protection} means a new listing
- * surface cannot get the rule subtly different — it either consults this or it
- * is operating on already-filtered data.
+ * This is the single choke point for the entire "do not leak" requirement:
+ * protected ids whose lock root has not been granted are withheld; the ones
+ * whose root *has* been granted are ordinary content again, in this session
+ * only. Deriving it from {@link Protection} means a listing surface cannot get
+ * the rule subtly different — it either consults this or it is operating on
+ * already-filtered data.
  */
-export function hiddenIds(protection: Protection, sessionLocked: boolean): HiddenIds {
-  if (!sessionLocked) return EMPTY_HIDDEN;
-  return { folders: protection.folders, notes: protection.notes, links: protection.links };
+export function hiddenIds(protection: Protection, granted: ReadonlySet<string>): HiddenIds {
+  if (!hasAnyProtection(protection)) return EMPTY_HIDDEN;
+
+  const withhold = (kind: ProtectedKind): ReadonlySet<string> => {
+    const ids = idsFor(protection, kind);
+    if (ids.size === 0) return ids;
+    const roots = rootsFor(protection, kind);
+    const out = new Set<string>();
+    for (const id of ids) {
+      const root = roots.get(id);
+      if (!root || !granted.has(root)) out.add(id);
+    }
+    return out;
+  };
+
+  return {
+    folders: withhold('folder'),
+    notes: withhold('note'),
+    links: withhold('link'),
+  };
 }
 
-export function isHidden(hidden: HiddenIds, kind: 'folder' | 'note' | 'link', id: string): boolean {
+export function isHidden(hidden: HiddenIds, kind: ProtectedKind, id: string): boolean {
   if (kind === 'folder') return hidden.folders.has(id);
   if (kind === 'note') return hidden.notes.has(id);
   return hidden.links.has(id);
+}
+
+/**
+ * A protected link with everything readable stripped out.
+ *
+ * The seal protects the database; this protects *memory*.
+ *
+ * Those are different threats and the second one is easy to miss: the vault
+ * holds a single key, so while any boundary is open the ciphertext of every
+ * other sealed row decrypts too. Without this, the plaintext of a folder the
+ * user has not opened would be sitting in the store, and the only thing standing
+ * between it and the screen would be a component remembering to check. That is
+ * exactly the class of bug that let a newly locked folder leak: one code path
+ * disagreed and the content was right there to disagree about.
+ *
+ * After this, a withheld row has no address, title, note or snippet anywhere in
+ * the app's memory — so a screen that forgets the check renders nothing, and the
+ * only way to read the content is to cross the boundary, which re-reads it.
+ *
+ * Structural fields are deliberately kept: `id`, `folderId`, `createdAt`, the
+ * flags and the counts. They are what lets the row exist on screen at all, and
+ * what a lock badge and a "Tap to unlock" affordance are built from.
+ */
+export function redactLink(link: SavedLink): SavedLink {
+  const redacted: SavedLink = { ...link, url: '', normalizedUrl: '' };
+  delete redacted.title;
+  delete redacted.description;
+  delete redacted.userNote;
+  delete redacted.rawText;
+  delete redacted.source;
+  return redacted;
+}
+
+/** The note equivalent of {@link redactLink}. */
+export function redactNote(note: Note): Note {
+  return { ...note, title: '', content: '' };
+}
+
+export function emptyHidden(): HiddenIds {
+  return EMPTY_HIDDEN;
+}
+
+/**
+ * Every distinct lock root in the vault.
+ *
+ * Granting all of them is the same as "nothing is withheld", which is what the
+ * tests use to state the contrast case — and what a future "open everything in
+ * this session" action would pass. It is derived from the maps rather than from
+ * the id sets, because two folders behind the same lock are one boundary, and
+ * counting them twice would confuse any caller reasoning about boundaries.
+ */
+export function allLockRoots(protection: Protection): Set<string> {
+  return new Set([
+    ...protection.folderRoots.values(),
+    ...protection.noteRoots.values(),
+    ...protection.linkRoots.values(),
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,11 +328,6 @@ interface LinkSecret {
   userNote?: string;
   rawText?: string;
   source?: string;
-}
-
-interface FolderSecret {
-  name: string;
-  icon?: string;
 }
 
 /** True when a row on disk is ciphertext rather than plaintext. */
@@ -238,18 +400,20 @@ export async function openLink(link: SavedLink, key: CryptoKey | null): Promise<
   return opened;
 }
 
-/** Seal a folder. The name is the secret — "Divorce" is as sensitive as a URL. */
-export async function sealFolder(folder: Folder, key: CryptoKey | null): Promise<Folder> {
-  if (isSealed(folder)) return folder;
-  if (!key) throw new Error('Cannot lock a folder while the vault is locked.');
-  const secret: FolderSecret = { name: folder.name };
-  if (folder.icon !== undefined) secret.icon = folder.icon;
-
-  const sealed: Folder = { ...folder, name: '', enc: await encryptJson(key, secret) };
-  delete sealed.icon;
-  return sealed;
+interface FolderSecret {
+  name: string;
+  icon?: string;
 }
 
+/**
+ * Restore a folder's legacy sealed name.
+ *
+ * Folder names are no longer sealed — the name is the label that makes the lock
+ * usable ("Private" versus an anonymous "Locked folder", and the only way to
+ * tell two locked folders apart in the destination picker). Rows written by an
+ * earlier build still carry a sealed name, so this stays readable and
+ * `reconcileProtection` opens them once a key is available.
+ */
 export async function openFolder(folder: Folder, key: CryptoKey | null): Promise<Folder> {
   if (!isSealed(folder)) return folder;
   if (!key) return folder;

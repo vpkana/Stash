@@ -4,9 +4,9 @@
 
     Flat, one colour, the same in light and dark: the app icon is the one surface
     that does not follow the theme, because a launcher shows it next to every other
-    app rather than inside Stash. `#182A24` is `brand_ink` — the tile the mark was
+    app rather than inside Stash. `#1B1A4D` is `brand_ink` — the tile the mark was
     drawn on, and the reason the icon and the interface read as one thing.
 -->
 <resources>
-    <color name="ic_launcher_background">#182A24</color>
+    <color name="ic_launcher_background">#1B1A4D</color>
 </resources>

@@ -1,7 +1,7 @@
 import type { Folder, LinkTag, Note, NoteLink, SavedLink, Tag } from '@/db/types';
 import { notePlainText } from '@/lib/notes';
 import { breadcrumbOf, folderPathLabel, noteBreadcrumb } from '@/lib/tree';
-import { hiddenIds, type HiddenIds, type Protection } from '@/lib/privacy/protection';
+import { emptyHidden, hiddenIds, type HiddenIds, type Protection } from '@/lib/privacy/protection';
 
 /**
  * Offline search across the whole vault.
@@ -329,9 +329,12 @@ export interface SearchOptions {
   noteLimit?: number;
   includeFolders?: boolean;
   /**
-   * Ids a locked session must not reveal. Pass `hiddenIds(protection, locked)`.
-   * Defaults to nothing hidden, so a caller that has no privacy context yet still
-   * gets a correct — if unfiltered — answer rather than a crash.
+   * Ids this session must not reveal. Pass `hiddenIds(protection, granted)`.
+   *
+   * Defaults to nothing hidden, which is only correct for a vault with no locks
+   * at all. The search *screen* always passes the published set from the vault
+   * store, so the default exists for pure unit tests and for a caller that has no
+   * privacy context yet — never as a fallback that quietly disables the lock.
    */
   hidden?: HiddenIds;
 }
@@ -344,7 +347,7 @@ export function searchVault(snapshot: VaultSnapshot, options: SearchOptions): Se
     folderLimit = 20,
     noteLimit = 60,
     includeFolders = true,
-    hidden = hiddenIds({ folders: new Set(), notes: new Set(), links: new Set() }, false),
+    hidden = emptyHidden(),
   } = options;
   const tokens = tokenize(query);
   const pathCache = new Map<string | null, string>();

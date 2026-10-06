@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Link2, Plus, X } from 'lucide-react';
+import { Link2, Plus, X } from '@/components/ui/icons';
 import type { SavedLink } from '@/db/types';
 import { displayUrl } from '@/lib/format';
 import { cn } from '@/lib/utils';

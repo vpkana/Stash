@@ -61,10 +61,19 @@ export function folderInitial(name: string): string {
 
 /*
  * `tintForId` used to live here: a hash that picked one of six soft tints for a
- * row's letter tile. It was removed with the tiles themselves. Colour in this
- * app means one of three things — the accent is the action or the selection,
- * amber is a favourite, red is a problem — and a hue derived from an id meant
- * none of them. Six colours that distinguish nothing are decoration, and
- * decoration that varies per row is the loudest tell that a list was generated
- * rather than designed.
+ * row's letter tile. It was removed, and the reasoning at the time was that a hue
+ * derived from an id carries no meaning.
+ *
+ * That reasoning was half right, and the half it got wrong is worth writing down
+ * because the app now does almost exactly this — see `identity-color.ts`. What was
+ * actually wrong with `tintForId` was not that it hashed an id. It was that the
+ * colour was *incidental*: six tints chosen to look pleasant, applied to a tile in
+ * one list, keyed so that the same item could shade differently in two places, and
+ * carrying nothing the user could learn.
+ *
+ * Identity colour is the same mechanism with the opposite intent: eight tones, one
+ * per identity, pinned for well-known domains, and — the load-bearing part —
+ * *stable*, so the colour becomes a name for the thing rather than a property of
+ * the row it happens to be drawn on. `format.ts` still holds no colour logic, and
+ * that part was right: colour is decided in one module and nowhere else.
  */

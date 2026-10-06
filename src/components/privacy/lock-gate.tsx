@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Fingerprint, Loader2, Lock, Unlock } from 'lucide-react';
+import { Fingerprint, Loader2, Lock, Unlock } from '@/components/ui/icons';
 import { devicePromptName, devicePromptTitle } from '@/lib/privacy/auth';
 import { shouldPromptForReveal } from '@/lib/privacy/session';
 import type { RevealKind } from '@/stores/privacy-store';
@@ -14,17 +14,18 @@ import { PasscodeInput } from './passcode-input';
  *
  * This is **not** a lock screen for the app, and deliberately so. Stash asks for
  * nothing to open: there is no app password, and the vault is not hidden behind a
- * gate. What is locked is content — a locked folder, note or link is ciphertext on
- * disk with its fields blanked, so it reads as a locked row and its contents are
- * simply not there to show.
+ * gate. What is locked is content — a protected folder's contents are ciphertext
+ * on disk, so they read as locked rows and are simply not there to show.
  *
- * This dialog exists for exactly one moment: the user tapped one of those rows and
- * the system prompt did not open it. That happens when the prompt is cancelled,
- * when it fails, or when this device has no way to prompt at all — and in all
- * three cases the honest answer is a sentence, not silence. Passing the prompt
- * unlocks every locked item for the session, because there is one vault key: the
- * contents of other locked folders become readable too, until the user moves to
- * another tab or leaves the app.
+ * This dialog exists for exactly one moment: the user tried to cross into a
+ * protected folder and the system prompt did not open it. That happens when the
+ * prompt is cancelled, when it fails, or when this device has no way to prompt at
+ * all — and in all three cases the honest answer is a sentence, not silence.
+ *
+ * What it grants is that one folder. The vault holds a single key, so the seal
+ * itself is all-or-nothing, but access is decided per boundary: passing this for
+ * `Private` opens `Private` and everything beneath it and leaves every other
+ * locked folder exactly as shut as it was.
  *
  * One branch survives for a vault made by an earlier build whose only wrap was a
  * passcode: that vault has no other key in existence, and asking for the passcode
@@ -42,7 +43,6 @@ export function LockGate() {
   const ready = usePrivacyStore((state) => state.ready);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
   const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
-  const unlocked = usePrivacyStore((state) => state.unlocked);
   const deviceAuthAvailable = usePrivacyStore((state) => state.deviceAuthAvailable);
   const deviceUnlockReady = usePrivacyStore((state) => state.deviceUnlockReady);
   const deviceStoreKind = usePrivacyStore((state) => state.deviceStoreKind);
@@ -61,7 +61,6 @@ export function LockGate() {
   const blocking = shouldPromptForReveal({
     ready,
     keyringPresent,
-    unlocked,
     hasRevealRequest: revealRequest !== null,
   });
   const devicePath = deviceAuthAvailable && deviceUnlockReady;
@@ -93,10 +92,10 @@ export function LockGate() {
         <h1 className="text-title mt-3 font-semibold tracking-tight text-fg">{noun}</h1>
         <p className="text-meta mt-1.5 leading-relaxed text-muted">
           {devicePath
-            ? `Unlock with ${devicePromptName(deviceStoreKind)} to open it. Everything else stays readable, and the other locked folders open too — until you switch tabs or leave Stash.`
+            ? `Unlock with ${devicePromptName(deviceStoreKind)} to open it. This opens the folder you asked for and nothing else; the rest of Stash stays exactly as it was.`
             : legacyPasscodeOnly
               ? 'This vault was created with a passcode, and its key is wrapped by that passcode alone — there is no device key to ask.'
-              : 'This device cannot show its lock prompt right now, so this item cannot be opened here. Everything else stays readable.'}
+              : 'This device cannot show its lock prompt right now, so this folder cannot be opened here. Everything else stays readable.'}
         </p>
 
         {devicePath ? (

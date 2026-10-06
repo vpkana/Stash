@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { CheckCircle2, FileJson, Info, Loader2, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, FileJson, Info, Loader2, ShieldAlert } from '@/components/ui/icons';
 import { useBackupStore } from '@/stores/backup-store';
 import { planTotal } from '@/lib/backup/merge';
 import { Button } from '@/components/ui/button';

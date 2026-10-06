@@ -14,7 +14,7 @@ import {
   Star,
   Trash2,
   Unlock,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { useRouter } from 'next/navigation';
 import type { Folder } from '@/db/types';
 import { FOLDER_ICON_CHOICES, Icon } from '@/components/ui/icon';
@@ -387,7 +387,12 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                   }
                   const next = !folder.isLocked;
                   void useVaultStore.getState().toggleFolderLocked(folder.id).then(() => {
-                    toast(next ? 'Locked — encrypted at rest' : 'Unlocked', { tone: 'success' });
+                    toast(
+                      next
+                        ? 'Locked — its contents need your unlock from now on'
+                        : 'Unlocked — this folder opens normally again',
+                      { tone: 'success' },
+                    );
                   });
                   close();
                 }}

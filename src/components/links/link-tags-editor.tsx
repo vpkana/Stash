@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check, Plus, Tag as TagIcon, X } from 'lucide-react';
+import { Check, Plus, Tag as TagIcon, X } from '@/components/ui/icons';
 import { normalizeTagName } from '@/db/repos/tags';
 import { useVaultStore, selectTagUsage, selectTagsForLink } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';

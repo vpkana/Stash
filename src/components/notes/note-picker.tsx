@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Home, Star } from 'lucide-react';
+import { Home, Star } from '@/components/ui/icons';
 import type { Note } from '@/db/types';
 import { canMoveNote, flattenNotes, noteDepth, noteDescendantIds } from '@/lib/tree';
 import { TreePickerList, type TreePickerItem } from '@/components/ui/tree-picker';

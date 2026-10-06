@@ -1,17 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { FilePlus2, Plus } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { BottomNav } from './bottom-nav';
+import { SidebarNav } from './sidebar-nav';
+import { PrimaryActionButton } from './primary-action';
 import { AndroidBack } from './android-back';
 import { CaptureSheet } from './capture/capture-sheet';
 import { LockGate } from './privacy/lock-gate';
-import { Toaster, toast } from './ui/toast';
+import { Toaster } from './ui/toast';
 import { useCaptureStore } from '@/stores/capture-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
-import { useVaultStore } from '@/stores/vault-store';
-import { cn } from '@/lib/utils';
 
 /**
  * The top-level section a route belongs to.
@@ -25,11 +24,19 @@ function sectionOf(pathname: string): string {
 }
 
 /**
- * The one-handed shell.
+ * Two shapes, one shell.
  *
- * The page never scrolls as a whole; the main region does. That keeps the tab
- * bar pinned, makes the gesture bar behave, and means a sheet can take over the
- * screen without the underlying page shifting behind it.
+ * **Phone.** The page never scrolls as a whole; the main region does. That keeps
+ * the tab bar pinned, makes the gesture bar behave, and means a sheet can take
+ * over the screen without the underlying page shifting behind it. This is the
+ * primary surface and nothing here is compromised for the desktop one.
+ *
+ * **Desktop.** Above `lg` the same shell becomes a row: the rail on the left, the
+ * content column on the right, no tab bar. Notice that this is one component with
+ * one `lg:` breakpoint rather than a second layout — a separate desktop shell is
+ * how the two drift until they hash differently, and the content column
+ * (`column` in `globals.css`) is what makes a 1400px window readable rather than
+ * merely wide.
  */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const captureStatus = useCaptureStore((state) => state.status);
@@ -61,12 +68,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const shareTakeover = captureStatus !== 'idle' && captureMode === 'share';
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden bg-bg px-safe pt-safe">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-bg px-safe pt-safe lg:flex-row lg:px-0 lg:pt-0">
+      <SidebarNav />
+
       <main id="main" className="scroll-area relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        {children}
+        {/*
+          The reading column. On a phone this is simply the full width, so the
+          phone layout is byte-for-byte what it was; above `lg` it stops growing
+          and centres, which is the entire difference between an app that was
+          designed for one screen and an app that happens to render on a big one.
+        */}
+        <div className="column flex min-h-full flex-col">{children}</div>
       </main>
 
-      {shareTakeover ? null : <React.Suspense fallback={null}>{<ContextAction />}</React.Suspense>}
+      <React.Suspense fallback={null}>
+        <PrimaryActionButton variant="floating" />
+      </React.Suspense>
 
       {shareTakeover ? null : <BottomNav />}
       <CaptureSheet />
@@ -76,70 +93,5 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Last so it paints over the shell, the sheets and the toasts alike. */}
       <LockGate />
     </div>
-  );
-}
-
-/**
- * The floating action, wherever the user is.
- *
- * One button that is always the action the current screen is for: on Notes it
- * creates a note, anywhere else it captures a link. Two cases make it step
- * aside, and both are about the button being wrong rather than ugly:
- *
- *  - **A note is open in the editor.** The editor owns the bottom of the screen
- *    with its formatting bar, which sits in exactly the space this button
- *    occupies. A floating button on top of a toolbar is a button nobody can tap,
- *    and creating a *new* note is not what anyone is doing mid-sentence.
- *  - **A share is being handled**, because the capture surface is the whole
- *    screen by then.
- *
- * This is a child of the shell, and wrapped in Suspense, for one reason:
- * `useSearchParams` has to suspend during prerendering, and the shell is in the
- * root layout where there is no boundary above it.
- */
-function ContextAction() {
-  const pathname = usePathname() ?? '/';
-  const params = useSearchParams();
-  const router = useRouter();
-  const openManual = useCaptureStore((state) => state.openManual);
-  const [busy, setBusy] = React.useState(false);
-
-  const onNotes = pathname === '/notes' || pathname.startsWith('/notes/');
-  const onSettings = pathname === '/settings' || pathname.startsWith('/settings/');
-  const editingNote = onNotes && params.has('note');
-
-  const handleAction = React.useCallback(async () => {
-    if (!onNotes) {
-      openManual();
-      return;
-    }
-    setBusy(true);
-    const result = await useVaultStore.getState().createNote({ title: 'New note', content: '', parentNoteId: null });
-    setBusy(false);
-    if (!result.ok) {
-      toast(result.message, { tone: 'danger' });
-      return;
-    }
-    router.push(`/notes?note=${result.note.id}`);
-  }, [onNotes, openManual, router]);
-
-  if (onSettings || editingNote) return null;
-
-  return (
-    <button
-      type="button"
-      onClick={() => void handleAction()}
-      disabled={busy}
-      aria-label={onNotes ? 'New note' : 'Add a link'}
-      className={cn(
-        // `bottom-20 mb-safe` sits it one clear step above the tab bar, and adds
-        // the system inset through the same variable the bar itself uses.
-        'tap tap-scale absolute right-4 bottom-20 z-30 mb-safe',
-        'flex size-14 items-center justify-center rounded-full bg-accent text-accent-fg shadow-raised',
-        'disabled:opacity-60',
-      )}
-    >
-      {onNotes ? <FilePlus2 size={25} strokeWidth={2.1} aria-hidden /> : <Plus size={26} strokeWidth={2.2} aria-hidden />}
-    </button>
   );
 }

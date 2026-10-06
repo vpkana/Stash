@@ -15,11 +15,11 @@
       corner   40 units at the top, 12 at the bottom tips: soft, but not a pill
       notch    51 units deep (22% of the height) with a curved apex
   -->
-  <rect width="512" height="512" rx="116" fill="#182A24" />
+  <rect width="512" height="512" rx="116" fill="#1B1A4D" />
   <g transform="translate(256 254) scale(1.22) translate(-256 -254)">
     <path
       d="M 204 140 H 308 Q 348 140 348 180 V 352 Q 348 368 336 368 L 268 322 Q 256 317 244 322 L 176 368 Q 164 368 164 352 V 180 Q 164 140 204 140 Z"
-      fill="#F6F1E7"
+      fill="#FFFFFF"
     />
   </g>
 </svg>

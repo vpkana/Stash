@@ -66,8 +66,8 @@ import {
   Wrench,
   X,
   Zap,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+} from '@/components/ui/icons';
+import type { IconType } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 
 /**
@@ -159,7 +159,7 @@ export interface IconProps {
 }
 
 export function Icon({ name, className, size = 20, strokeWidth = 1.75 }: IconProps) {
-  const Component: LucideIcon = isIconName(name) ? ICONS[name] : Folder;
+  const Component: IconType = isIconName(name) ? ICONS[name] : Folder;
   return <Component className={cn('shrink-0', className)} size={size} strokeWidth={strokeWidth} aria-hidden />;
 }
 

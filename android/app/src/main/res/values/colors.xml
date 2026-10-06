@@ -12,7 +12,7 @@
         sees. A bitmap there can therefore surface as a stray band of somebody
         else's image above the app content. A flat colour cannot.
     -->
-    <color name="stash_window_background">#FAF8F4</color>
+    <color name="stash_window_background">#F6F7FB</color>
 
     <!--
         The brand pair, kept here as well as in `src/app/globals.css` because the
@@ -23,7 +23,7 @@
         Deliberately *not* duplicated into `values-night/`: the icon is the same
         object in both themes.
     -->
-    <color name="brand_ink">#182A24</color>
-    <color name="brand_cream">#F6F1E7</color>
+    <color name="brand_ink">#1B1A4D</color>
+    <color name="brand_cream">#FFFFFF</color>
 
 </resources>

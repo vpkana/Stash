@@ -13,7 +13,7 @@ import {
   Star,
   Trash2,
   Unlock,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import type { Note, NoteDeletionImpact } from '@/db/types';
 import { pluralize } from '@/lib/format';
 import { useBackDismiss } from '@/hooks/use-back-dismiss';

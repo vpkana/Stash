@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowLeft, Check, CornerDownRight, FolderPlus, Plus } from 'lucide-react';
+import { ArrowLeft, Check, CornerDownRight, FolderPlus, Plus } from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
 import { folderPathLabel } from '@/lib/tree';
 import { useVaultStore } from '@/stores/vault-store';

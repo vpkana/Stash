@@ -80,7 +80,17 @@ import { visibleNotes } from '@/lib/notes';
 import { noteBreadcrumb, noteChildren, noteDescendantIds } from '@/lib/tree';
 import { computeFolderStats, type FolderStats } from '@/lib/folder-stats';
 import { isSessionLocked } from '@/lib/privacy/keyring';
-import { computeProtection, hiddenIds, type HiddenIds, type Protection } from '@/lib/privacy/protection';
+import {
+  EMPTY_PROTECTION,
+  computeProtection,
+  hiddenIds,
+  emptyHidden,
+  redactLink,
+  redactNote,
+  type HiddenIds,
+  type Protection,
+} from '@/lib/privacy/protection';
+import { usePrivacyStore } from './privacy-store';
 
 /**
  * The in-memory mirror of the vault.
@@ -117,7 +127,8 @@ export interface VaultState {
   /** Note-to-link references, the join between the two halves of the vault. */
   noteLinks: NoteLink[];
   /**
-   * Which ids are locked, in their own right or through an ancestor.
+   * Which ids are locked, in their own right or through an ancestor, and which
+   * locked folder each of them belongs to.
    *
    * Unlike the collections above this is *not* filtered: the UI needs it to show
    * a lock badge on a subtree that inherited a lock, and to explain why an item
@@ -125,10 +136,26 @@ export interface VaultState {
    * of locked items are useless without the key.
    */
   protection: Protection;
-  /** Whether the session is currently locked, i.e. the vault key is absent. */
+  /** Which lock roots are currently open. Mirrors the privacy session. */
+  grantedRoots: string[];
+  /** Whether the vault key is absent, i.e. sealed rows cannot be decrypted. */
   sessionLocked: boolean;
-  /** Ids withheld from search and listings. Empty while unlocked. */
+  /**
+   * Ids whose lock boundary has not been crossed. Every listing surface filters
+   * or gates on this, and it is the only answer to "may this be shown now".
+   *
+   * It is empty only when nothing is protected or when every open boundary
+   * covers everything — never merely because the vault key happens to be in
+   * memory. That distinction is the fix for folders that were locked *after* the
+   * app had already been unlocked: the key being present does not make an
+   * unopened folder readable.
+   */
   hidden: HiddenIds;
+  /**
+   * False when nothing is protected at all, so the common case costs no work.
+   * Used to skip lock plumbing on a vault that has no locked folders.
+   */
+  hasProtection: boolean;
   /**
    * Live, unarchived links that have no folder: the Inbox.
    *
@@ -296,16 +323,47 @@ async function loadEverything() {
 
   const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
   const sessionLocked = isSessionLocked();
-  const hidden = hiddenIds(protection, sessionLocked);
+  const grantedRoots = usePrivacyStore.getState().grantedRoots;
+  const hidden = hiddenIds(protection, new Set(grantedRoots));
+  const hasProtection = protection.folders.size > 0 || protection.notes.size > 0 || protection.links.size > 0;
 
+  /*
+   * Withheld rows are *stripped*, not merely flagged.
+   *
+   * The vault key is one key, so the moment anything is open every sealed row in
+   * the store has been decrypted — including the ones behind boundaries the user
+   * has not crossed. `redact*` removes the readable fields here, at the single
+   * point every screen reads from, which turns "do not show this" from a rule
+   * each component has to remember into a fact about the data. A list that forgets
+   * its check renders a blank row; it cannot render a URL, because there is none.
+   *
+   * Folder *names* survive, deliberately: a name is the label on the lock rather
+   * than what is behind it, and it is what makes `Private` tappable instead of an
+   * anonymous "Locked folder".
+   */
   const folders = snapshot.folders;
-  const links = snapshot.links;
-  const notes = snapshot.notes;
+  const links = snapshot.links.map((link) => (hidden.links.has(link.id) ? redactLink(link) : link));
+  const notes = snapshot.notes.map((note) => (hidden.notes.has(note.id) ? redactNote(note) : note));
+  const openNotes = visibleNotes(notes);
 
-  // Counts include locked rows: the row is on screen, so "2 links" beside it
-  // has to agree with what the user can see. The *contents* stay unreadable,
-  // which is what the counts were ever protecting.
-  const folderStats = computeFolderStats(snapshot.folders, snapshot.links);
+  /*
+   * Every derived collection below is built from the same `hidden` sets.
+   *
+   * That is the point of doing it here rather than in each screen: a row that a
+   * listing shows because it forgot to filter is a leak, and there is exactly one
+   * place in the app that decides what a listing may contain. The raw collections
+   * above are still published, because the UI has to be able to *show* a locked
+   * folder in order to let the user open it — a screen that renders one does so
+   * through the central access check, as a locked row, never as content.
+   */
+  const folderStats = computeFolderStats(folders, links, {
+    hiddenFolderIds: hidden.folders,
+    hiddenLinkIds: hidden.links,
+  });
+
+  // Tag counts are a listing too: "#therapy (3)" discloses the content of three
+  // links, so a tag's count covers only links this session may read.
+  const visibleLinkTags = snapshot.linkTags.filter((row) => !hidden.links.has(row.linkId));
 
   return {
     folders,
@@ -315,18 +373,20 @@ async function loadEverything() {
     folderStats,
     recentFolderIds,
     notes,
-    visibleNotes: visibleNotes(notes),
+    visibleNotes: openNotes,
     noteLinks: snapshot.noteLinks,
     protection,
+    grantedRoots,
     sessionLocked,
     hidden,
-    inboxLinks: inboxOf(links),
-    favoriteFolders: folders.filter((folder) => folder.isFavorite),
-    favoriteNotes: [...visibleNotes(notes)]
-      .filter((note) => note.isFavorite)
+    hasProtection,
+    inboxLinks: inboxOf(links.filter((link) => !hidden.links.has(link.id))),
+    favoriteFolders: folders.filter((folder) => folder.isFavorite && !hidden.folders.has(folder.id)),
+    favoriteNotes: [...openNotes]
+      .filter((note) => note.isFavorite && !hidden.notes.has(note.id))
       .sort((a, b) => b.updatedAt - a.updatedAt),
-    tagUsage: tagUsageOf(tags, snapshot.linkTags),
-    tagsByLink: tagNamesByLink(tags, snapshot.linkTags),
+    tagUsage: tagUsageOf(tags, visibleLinkTags),
+    tagsByLink: tagNamesByLink(tags, visibleLinkTags),
   };
 }
 
@@ -341,9 +401,11 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   notes: [],
   visibleNotes: [],
   noteLinks: [],
-  protection: { folders: new Set(), notes: new Set(), links: new Set() },
+  protection: EMPTY_PROTECTION,
+  grantedRoots: [],
   sessionLocked: false,
-  hidden: { folders: new Set(), notes: new Set(), links: new Set() },
+  hidden: emptyHidden(),
+  hasProtection: false,
   inboxLinks: [],
   favoriteFolders: [],
   favoriteNotes: [],
@@ -682,7 +744,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
 /** Direct subnotes of `parentNoteId` (`null` = root notes), in display order. */
 export function selectChildNotes(state: VaultState, parentNoteId: string | null): Note[] {
-  return noteChildren(state.visibleNotes, parentNoteId);
+  return noteChildren(state.visibleNotes, parentNoteId).filter(
+    (note) => !state.hidden.notes.has(note.id),
+  );
 }
 
 /** Ancestors from the root down to the note itself, for breadcrumbs. */
@@ -690,19 +754,35 @@ export function selectNoteTrail(state: VaultState, noteId: string): Note[] {
   return noteBreadcrumb(state.notes, noteId);
 }
 
-/** How many notes live below this one, so a parent note reads as a container. */
+/**
+ * How many notes live below this one, so a parent note reads as a container.
+ *
+ * Withheld descendants are not counted. A count is a listing: "3 notes below" on
+ * a note the user can read, where those three are locked, says something the lock
+ * was meant to keep quiet.
+ */
 export function selectDescendantNoteCount(state: VaultState, noteId: string): number {
-  return noteDescendantIds(state.notes, noteId).length;
+  return noteDescendantIds(state.notes, noteId).filter((id) => !state.hidden.notes.has(id)).length;
 }
 
-/** Saved links referenced by a note, in the order they were attached. */
+/**
+ * Saved links referenced by a note, in the order they were attached.
+ *
+ * Withheld links are dropped rather than shown as a locked row: an attached
+ * reference is a *summary* of the note, and a summary that lists "Locked link"
+ * rows tells an onlooker how much protected content a note points at. The note
+ * itself still opens; it simply does not enumerate what it cannot read.
+ */
 export function selectLinksForNote(state: VaultState, noteId: string): SavedLink[] {
   const byId = new Map(state.links.map((link) => [link.id, link]));
   return state.noteLinks
     .filter((row) => row.noteId === noteId)
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((row) => byId.get(row.linkId))
-    .filter((link): link is SavedLink => Boolean(link) && !link!.isArchived);
+    .filter(
+      (link): link is SavedLink =>
+        Boolean(link) && !link!.isArchived && !state.hidden.links.has(link!.id),
+    );
 }
 
 /** Notes that reference a saved link. Powers "Referenced in" on a link. */
@@ -711,12 +791,22 @@ export function selectNotesForLink(state: VaultState, linkId: string): Note[] {
   return state.noteLinks
     .filter((row) => row.linkId === linkId)
     .map((row) => byId.get(row.noteId))
-    .filter((note): note is Note => Boolean(note));
+    .filter((note): note is Note => Boolean(note) && !state.hidden.notes.has(note!.id));
 }
 
-/** Notes the user edited most recently, newest first. */
+/**
+ * Notes the user edited most recently, newest first.
+ *
+ * Withheld notes are left out: a "recently edited" shelf is a recency listing,
+ * and a recency listing that shows a locked placeholder leaks the timing of
+ * private activity. Browsing a locked note is still possible from Notes itself,
+ * where the row is reachable on purpose.
+ */
 export function selectRecentNotes(state: VaultState, limit = 4): Note[] {
-  return [...state.visibleNotes].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+  return [...state.visibleNotes]
+    .filter((note) => !state.hidden.notes.has(note.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, limit);
 }
 
 /** Note ids referenced by any note, used to badge links in lists. */
@@ -724,12 +814,19 @@ export function selectReferencedLinkIds(state: VaultState): Set<string> {
   return new Set(state.noteLinks.map((row) => row.linkId));
 }
 
-/** Convenience selector: recent destinations that still exist, newest first. */
+/**
+ * Recent destinations that still exist and may be filed into right now.
+ *
+ * A withheld folder is skipped rather than returned: this list is what the
+ * capture sheet pre-selects and offers first, and offering a destination the
+ * session cannot read would put a lock prompt in front of a save the user never
+ * asked to unlock anything for.
+ */
 export function selectRecentDestinations(state: VaultState): Folder[] {
   const byId = new Map(state.folders.map((folder) => [folder.id, folder]));
   return state.recentFolderIds
     .map((id) => byId.get(id))
-    .filter((folder): folder is Folder => Boolean(folder));
+    .filter((folder): folder is Folder => Boolean(folder) && !state.hidden.folders.has(folder!.id));
 }
 
 /**
@@ -744,7 +841,9 @@ export function selectInboxLinks(state: VaultState): SavedLink[] {
 
 /** Links the user marked as no longer working, for a "needs attention" count. */
 export function selectUnavailableLinks(state: VaultState): SavedLink[] {
-  return state.links.filter((link) => link.isUnavailable && !link.isArchived);
+  return state.links.filter(
+    (link) => link.isUnavailable && !link.isArchived && !state.hidden.links.has(link.id),
+  );
 }
 
 /** Favorite notes, newest first. Precomputed, so the reference is stable. */

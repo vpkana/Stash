@@ -2,52 +2,32 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Library, NotebookPen, Search, Settings, type LucideIcon } from 'lucide-react';
+import { NAV_ITEMS, isActiveNav } from './nav';
 import { cn } from '@/lib/utils';
 
 /**
- * Primary navigation.
+ * Primary navigation, phone shape.
  *
- * Five destinations, which is the practical limit for a thumb-reachable bar on a
- * phone: Home answers "what did I just save", Library is where structure lives,
- * Notes is where the user's own writing lives, Search finds anything, and
- * Settings holds the rare, destructive things.
+ * Hidden from `lg` up, where {@link SidebarNav} takes over: two navigations on
+ * screen at once is the clearest possible signal that an app was ported to the
+ * web rather than designed for it.
  *
- * The bar is deliberately tall (64px of touch, plus the safe area) and its
- * active state is a filled capsule behind the icon *and* the label: the label
- * carries the meaning, and colouring only the icon makes people hunt for which
- * tab they are on.
+ * The bar is deliberately tall (64px of touch, plus the safe area) and its active
+ * state is a filled capsule behind the icon *and* the label: the label carries
+ * the meaning, and colouring only the icon makes people hunt for which tab they
+ * are on.
  */
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-}
-
-const ITEMS: NavItem[] = [
-  { href: '/', label: 'Home', icon: Home },
-  { href: '/library', label: 'Library', icon: Library },
-  { href: '/notes', label: 'Notes', icon: NotebookPen },
-  { href: '/search', label: 'Search', icon: Search },
-  { href: '/settings', label: 'Settings', icon: Settings },
-];
-
-function isActive(pathname: string, href: string): boolean {
-  if (href === '/') return pathname === '/';
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
-
 export function BottomNav() {
   const pathname = usePathname() ?? '/';
 
   return (
     <nav
       aria-label="Primary"
-      className="z-40 shrink-0 border-t border-hairline bg-surface/95 pb-safe backdrop-blur-xl"
+      className="z-40 shrink-0 border-t border-hairline bg-surface/95 pb-safe backdrop-blur-xl lg:hidden"
     >
       <ul className="flex items-stretch">
-        {ITEMS.map((item) => {
-          const active = isActive(pathname, item.href);
+        {NAV_ITEMS.map((item) => {
+          const active = isActiveNav(pathname, item.href);
           const TabIcon = item.icon;
           return (
             <li key={item.href} className="flex-1">
@@ -59,7 +39,7 @@ export function BottomNav() {
                 <span
                   className={cn(
                     'flex h-7 w-12 items-center justify-center rounded-full transition-colors duration-200',
-                    active ? 'bg-accent-soft' : 'bg-transparent',
+                    active ? 'nav-active' : 'bg-transparent',
                   )}
                 >
                   <TabIcon

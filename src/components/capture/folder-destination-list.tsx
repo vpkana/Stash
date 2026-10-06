@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Inbox, Star } from 'lucide-react';
+import { Inbox, Lock, Star } from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
 import { flattenFolders } from '@/lib/tree';
 import {
@@ -26,7 +26,7 @@ import { TreePickerList, type TreePickerItem } from '@/components/ui/tree-picker
 
 export type { DestinationKind, DestinationSelection } from '@/lib/destination';
 
-import { isSealed } from '@/lib/privacy/protection';
+import { useVaultStore } from '@/stores/vault-store';
 
 export const INBOX_SELECTION = INBOX_DESTINATION;
 export const FAVORITES_SELECTION = FAVORITES_DESTINATION;
@@ -59,14 +59,19 @@ export function FolderDestinationList({
   footer,
 }: FolderDestinationListProps) {
   /*
-   * A locked folder is not a destination while it is unreadable.
+   * Locked folders ARE destinations, and they are listed.
    *
-   * Its name is ciphertext in this session — the row would read "Locked folder"
-   * with no path — and filing something into a folder you cannot identify is a
-   * way to lose it. The folder reappears here the moment the vault is unlocked,
-   * so this hides nothing permanently.
+   * They are labelled with a lock rather than hidden, because "file this in
+   * Private" is a perfectly normal thing to want and the prompt that follows is
+   * the whole point of a lock. What they are not is *silently* selectable: the
+   * caller asks for access before it accepts the choice, so the password is asked
+   * for at the moment a protected destination is chosen and at no other time.
    */
-  const destinations = React.useMemo(() => folders.filter((folder) => !isSealed(folder)), [folders]);
+  const hidden = useVaultStore((state) => state.hidden);
+  const destinations = React.useMemo(
+    () => folders.map((folder) => ({ folder, locked: hidden.folders.has(folder.id) })),
+    [folders, hidden],
+  );
 
   const items = React.useMemo<TreePickerItem[]>(() => {
     const rows: TreePickerItem[] = [];
@@ -92,7 +97,9 @@ export function FolderDestinationList({
       });
     }
 
-    for (const entry of flattenFolders(destinations)) {
+    const lockedIds = new Set(destinations.filter((entry) => entry.locked).map((entry) => entry.folder.id));
+    for (const entry of flattenFolders(destinations.map((entry) => entry.folder))) {
+      const locked = lockedIds.has(entry.folder.id);
       rows.push({
         key: `folder:${entry.folder.id}`,
         label: entry.folder.name,
@@ -101,7 +108,10 @@ export function FolderDestinationList({
         icon: isIconName(entry.folder.icon) ? (
           <Icon name={entry.folder.icon} size={16} strokeWidth={1.9} />
         ) : undefined,
-        badge: entry.folder.isFavorite ? (
+        hint: locked ? 'Locked · asks for your unlock' : undefined,
+        badge: locked ? (
+          <Lock size={13} strokeWidth={2.4} className="shrink-0 text-accent" aria-label="Locked folder" />
+        ) : entry.folder.isFavorite ? (
           <Star size={13} strokeWidth={2} className="shrink-0 text-warning" aria-label="Favorite folder" />
         ) : undefined,
       });
@@ -126,7 +136,7 @@ export function FolderDestinationList({
       onSelect={handleSelect}
       alwaysFilterable={alwaysFilterable}
       filterPlaceholder={filterPlaceholder}
-      emptyTitle={destinations.length === 0 ? 'No folders yet' : 'Nothing here yet'}
+      emptyTitle={folders.length === 0 ? 'No folders yet' : 'Nothing here yet'}
       emptyHint={folders.length === 0 ? 'Use “Create folder” below to add one.' : undefined}
       {...(footer ? { footer } : {})}
       {...(className ? { className } : {})}

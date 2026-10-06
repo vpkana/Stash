@@ -2,13 +2,13 @@
 
 import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Clock, Search as SearchIcon, SearchX, Tag as TagIcon, X } from 'lucide-react';
+import { Clock, Search as SearchIcon, SearchX, Tag as TagIcon, X } from '@/components/ui/icons';
 import type { Note, SavedLink } from '@/db/types';
 import { SEARCH_FILTERS, searchVault, type SearchFilter } from '@/lib/search';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { useVaultStore, selectTagUsage } from '@/stores/vault-store';
-import { PageHeader, Section } from '@/components/ui/page';
+import { ListSurface, PageHeader, Section } from '@/components/ui/page';
 import { LinkRow } from '@/components/links/link-row';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
 import { FolderRow } from '@/components/folders/folder-row';
@@ -191,7 +191,7 @@ function SearchView() {
 
       {outcome.folders.length > 0 ? (
         <Section title={filter === 'favorites' ? 'Favorite folders' : 'Folders'}>
-          <div className="flex flex-col gap-0.5 px-2">
+          <ListSurface>
             {outcome.folders.map((hit) => (
               <FolderRow
                 key={hit.folder.id}
@@ -201,7 +201,7 @@ function SearchView() {
                 onShowActions={() => router.push(`/library?folder=${hit.folder.id}`)}
               />
             ))}
-          </div>
+          </ListSurface>
         </Section>
       ) : null}
 
@@ -213,7 +213,7 @@ function SearchView() {
               : `${pluralize(outcome.notes.length, 'note')}${outcome.relaxed ? ' · loose match' : ''}`
           }
         >
-          <div className="flex flex-col gap-0.5 px-2">
+          <ListSurface>
             {outcome.notes.map((hit) => (
               <NoteRow
                 key={hit.note.id}
@@ -225,7 +225,7 @@ function SearchView() {
                 onShowActions={() => setActiveNote(hit.note)}
               />
             ))}
-          </div>
+          </ListSurface>
         </Section>
       ) : null}
 
@@ -239,7 +239,7 @@ function SearchView() {
               : `${pluralize(outcome.links.length, 'result')}${outcome.relaxed ? ' · loose match' : ''}`
           }
         >
-          <div className="flex flex-col gap-0.5 px-2">
+          <ListSurface>
             {outcome.links.map((hit) => (
               <LinkRow
                 key={hit.link.id}
@@ -251,7 +251,7 @@ function SearchView() {
                 onShowActions={() => setActiveLink(hit.link)}
               />
             ))}
-          </div>
+          </ListSurface>
         </Section>
       ) : null}
 

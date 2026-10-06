@@ -67,7 +67,11 @@ export function AppBoot({ children }: { children: React.ReactNode }) {
 export function PrivacySession() {
   React.useEffect(() => {
     return usePrivacyStore.subscribe((state, previous) => {
-      if (state.unlocked === previous.unlocked) return;
+      // The key changed (what is *decryptable*) or a lock boundary was crossed
+      // (what is *permitted*). Both change what every listing may show, so both
+      // re-read. `grantedRoots` is a fresh array on every grant, so a reference
+      // check is enough.
+      if (state.unlocked === previous.unlocked && state.grantedRoots === previous.grantedRoots) return;
       void useVaultStore.getState().refresh();
     });
   }, []);

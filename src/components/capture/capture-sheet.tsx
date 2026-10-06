@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check, Copy, FolderPlus, Inbox, Loader2, Plus, Share2, X } from 'lucide-react';
+import { Check, Copy, FolderPlus, Inbox, Loader2, Plus, Share2, X } from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
 import { destinationLabel } from '@/lib/destination';
 import { isHttpUrl } from '@/lib/url/normalize';
@@ -116,6 +116,9 @@ export function CaptureSheet() {
       setError('That does not look like a web address. Check it and try again.');
       urlInputRef.current?.focus();
     }
+    if (outcome.reason === 'locked') {
+      setError('That folder stayed locked, so nothing was saved. Pick another destination and try again.');
+    }
   }, [duplicatePending, folders]);
 
   /**
@@ -131,6 +134,7 @@ export function CaptureSheet() {
 
     const outcome = await useCaptureStore.getState().saveToInbox();
     if (outcome.ok) {
+
       const link = outcome.link;
       toast('Saved to Inbox', {
         tone: 'success',
@@ -268,7 +272,7 @@ export function CaptureSheet() {
                   <FolderDestinationList
                     folders={folders}
                     selection={destination}
-                    onSelect={selectDestination}
+                    onSelect={(selection) => void useCaptureStore.getState().chooseDestination(selection)}
                     showInbox
                     showFavorites
                     footer={
@@ -453,14 +457,26 @@ function LinkPreview({
           />
         </div>
       ) : (
-        <div className="mt-1.5">
-          {title ? (
-            <p className="line-clamp-3 text-row leading-snug font-medium text-fg">{title}</p>
-          ) : (
-            <p className="text-row leading-snug font-medium text-muted">{displayUrl(url, 80)}</p>
-          )}
-          {note ? <p className="mt-1 line-clamp-2 text-meta leading-snug text-muted">{note}</p> : null}
-          {title ? <p className="mt-1 truncate text-meta text-subtle">{displayUrl(url, 72)}</p> : null}
+        /*
+         * A share gets one field, not a form.
+         *
+         * The whole point of saving from the share sheet is speed, so the note is
+         * the only thing offered for editing — pre-filled from the source's title
+         * when there was one, and always optional. The address is shown as context
+         * rather than as an input: the user did not come here to retype a URL, and
+         * the shared one is already exactly right.
+         */
+        <div className="mt-2 flex flex-col gap-2">
+          <Input
+            value={note}
+            onChange={(event) => onFieldChange('note', event.target.value)}
+            placeholder="Add a note (optional)"
+            aria-label="Note"
+            autoComplete="off"
+            enterKeyHint="done"
+            maxLength={500}
+          />
+          <p className="truncate text-meta text-subtle">{displayUrl(url, 90)}</p>
         </div>
       )}
 

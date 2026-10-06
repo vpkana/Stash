@@ -2,15 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { Folder, Note, SavedLink } from '@/db/types';
 import { computeFolderStats } from '@/lib/folder-stats';
 import {
+  allLockRoots,
+  canAccess,
   computeProtection,
   hiddenIds,
   isHidden,
   isSealed,
+  lockRootOf,
   openFolder,
   openLink,
   openNote,
   openVault,
-  sealFolder,
   sealLink,
   sealNote,
 } from '@/lib/privacy/protection';
@@ -141,23 +143,58 @@ describe('protection inheritance', () => {
     expect(protection.folders.has('b')).toBe(true);
   });
 
-  it('hides nothing while the session is unlocked', () => {
+  it('withholds every protected id until its own boundary is crossed', () => {
     const folders = [folder('private', 'Private', null, true)];
     const notes = [note('journal', 'Journal', null, true)];
     const links = [link('l', 'https://a.example', 'private')];
     const protection = computeProtection(folders, notes, links);
 
-    const locked = hiddenIds(protection, true);
+    // Nothing granted: the whole protected set is withheld.
+    const locked = hiddenIds(protection, new Set());
     expect(isHidden(locked, 'folder', 'private')).toBe(true);
     expect(isHidden(locked, 'note', 'journal')).toBe(true);
     expect(isHidden(locked, 'link', 'l')).toBe(true);
 
-    // Unlocked, the same ids are ordinary again: the content is decrypted in
-    // memory, so there is nothing left to withhold.
-    const open = hiddenIds(protection, false);
+    // Every boundary open: the same ids are ordinary content again.
+    const open = hiddenIds(protection, allLockRoots(protection));
     expect(isHidden(open, 'folder', 'private')).toBe(false);
     expect(isHidden(open, 'note', 'journal')).toBe(false);
     expect(isHidden(open, 'link', 'l')).toBe(false);
+  });
+
+  it('opens one locked folder without opening another', () => {
+    // The regression this whole model exists for: two locked folders, one of them
+    // opened, and the other must stay exactly as shut as it was.
+    const folders = [
+      folder('private', 'Private', null, true),
+      folder('banking', 'Banking', null, true),
+      folder('bank-statements', 'Statements', 'banking'),
+      folder('work', 'Work'),
+    ];
+    const links = [
+      link('l-private', 'https://a.example', 'private'),
+      link('l-bank', 'https://b.example', 'bank-statements'),
+      link('l-work', 'https://c.example', 'work'),
+    ];
+    const protection = computeProtection(folders, [], links);
+    const granted = new Set(['private']);
+
+    expect(canAccess(protection, granted, 'folder', 'private')).toBe(true);
+    expect(canAccess(protection, granted, 'folder', 'banking')).toBe(false);
+    // Inheritance is decided on the root, so the child of a still-locked folder is
+    // still locked even though it was never locked itself.
+    expect(lockRootOf(protection, 'folder', 'bank-statements')).toBe('banking');
+    expect(canAccess(protection, granted, 'folder', 'bank-statements')).toBe(false);
+    expect(canAccess(protection, granted, 'link', 'l-bank')).toBe(false);
+
+    // Inside the opened folder, and in unprotected branches, everything is fine.
+    expect(canAccess(protection, granted, 'link', 'l-private')).toBe(true);
+    expect(canAccess(protection, granted, 'link', 'l-work')).toBe(true);
+    expect(canAccess(protection, granted, 'folder', 'work')).toBe(true);
+
+    const hidden = hiddenIds(protection, granted);
+    expect([...hidden.folders].sort()).toEqual(['bank-statements', 'banking']);
+    expect([...hidden.links].sort()).toEqual(['l-bank']);
   });
 });
 
@@ -212,12 +249,29 @@ describe('sealing', () => {
     expect(opened.rawText).toBe('shared from the clinic app');
   });
 
-  it('hides a folder name', async () => {
+  it('keeps a folder name readable while sealing what is inside it', async () => {
+    // The name is the label on the lock, not the content behind it. Without it a
+    // protected folder is indistinguishable from every other protected folder —
+    // including in the share destination picker, where the user has to say which
+    // one a link is going into.
     const key = await generateVaultKey();
-    const sealed = await sealFolder(folder('f1', 'Divorce', null, true), key);
-    expect(sealed.name).toBe('');
-    expect(JSON.stringify(sealed)).not.toContain('Divorce');
-    expect((await openFolder(sealed, key)).name).toBe('Divorce');
+    const name = 'Divorce';
+    const stored = folder('f1', name, null, true);
+    expect(stored.name).toBe(name);
+
+    // A row written by an earlier build still holds a sealed name. Without a key
+    // it stays blank — the app has nothing to show and says so — and reconcile
+    // opens it once a key is available, which is the migration.
+    const legacy: Folder = {
+      ...folder('f2', '', null, true),
+      enc: { v: 1, alg: 'AES-GCM', iv: 'AAAA', ct: 'AAAA' },
+    };
+    expect(isSealed(legacy)).toBe(true);
+    expect((await openFolder(legacy, null)).name).toBe('');
+    expect((await openFolder(legacy, null)).enc).toBeDefined();
+    // A folder that was never sealed is untouched by either direction.
+    const plain = folder('f3', 'Work');
+    expect(await openFolder(plain, key)).toBe(plain);
   });
 
   it('produces blank fields, not an error, when there is no key', async () => {
@@ -230,10 +284,9 @@ describe('sealing', () => {
     expect(isSealed(parked)).toBe(true);
   });
 
-  it('refuses to seal without a key rather than writing plaintext', async () => {
+  it('refuses to seal content without a key rather than writing plaintext', async () => {
     await expect(sealNote(note('n1', 'Private'), null)).rejects.toThrow();
     await expect(sealLink(link('l1', 'https://x.example'), null)).rejects.toThrow();
-    await expect(sealFolder(folder('f1', 'Private'), null)).rejects.toThrow();
   });
 
   it('is idempotent: sealing an already-sealed row is a no-op', async () => {
@@ -279,7 +332,7 @@ describe('counts and search while locked', () => {
     link('l-dev', 'https://docs.example', 'dev'),
   ];
   const protection = computeProtection(folders, notes, links);
-  const locked = hiddenIds(protection, true);
+  const locked = hiddenIds(protection, new Set());
 
   it('excludes locked ids from folder counts', () => {
     const stats = computeFolderStats(folders, links, {
@@ -314,7 +367,7 @@ describe('counts and search while locked', () => {
 
   it('finds the same content once unlocked', () => {
     const snapshot = { folders, notes, links, tags: [], linkTags: [], noteLinks: [] };
-    const outcome = searchVault(snapshot, { query: 'Journal', hidden: hiddenIds(protection, false) });
+    const outcome = searchVault(snapshot, { query: 'Journal', hidden: hiddenIds(protection, allLockRoots(protection)) });
     expect(outcome.notes.map((hit) => hit.note.id)).toEqual(['journal']);
   });
 

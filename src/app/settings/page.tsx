@@ -12,8 +12,8 @@ import {
   Sun,
   Trash2,
   Upload,
-} from 'lucide-react';
-import { RotateCcw } from 'lucide-react';
+} from '@/components/ui/icons';
+import { RotateCcw } from '@/components/ui/icons';
 import { PrivacySettings } from '@/components/privacy/privacy-settings';
 import { ExportPanel } from '@/components/backup/export-panel';
 import { ImportFlow } from '@/components/backup/import-flow';
@@ -39,9 +39,13 @@ export default function SettingsPage() {
   const folders = useVaultStore((state) => state.folders);
   const links = useVaultStore((state) => state.links);
   const notes = useVaultStore((state) => state.visibleNotes);
+  const hidden = useVaultStore((state) => state.hidden);
   const inboxCount = useVaultStore((state) => state.inboxLinks.length);
+  // Every count on this screen is a listing, so every one of them is drawn from
+  // what this session may actually read. A "1,204 links" total that included
+  // protected ones would be a number the user cannot reconcile with anything.
   const unavailableCount = useVaultStore(
-    (state) => state.links.filter((link) => link.isUnavailable && !link.isArchived).length,
+    (state) => state.links.filter((link) => link.isUnavailable && !link.isArchived && !state.hidden.links.has(link.id)).length,
   );
   const trashCount = useVaultStore((state) => state.trashGroups.length);
   const loadTrash = useVaultStore((state) => state.loadTrash);
@@ -53,9 +57,24 @@ export default function SettingsPage() {
   const [confirmErase, setConfirmErase] = React.useState(false);
   const beginImport = useBackupStore((state) => state.beginImport);
 
-  const activeLinks = links.filter((link) => !link.isArchived);
-  const archived = links.length - activeLinks.length;
+  const readableLinks = links.filter((link) => !hidden.links.has(link.id));
+  const readableNotes = notes.filter((note) => !hidden.notes.has(note.id));
+  const readableFolders = folders.filter((folder) => !hidden.folders.has(folder.id));
+  const activeLinks = readableLinks.filter((link) => !link.isArchived);
+  const archived = readableLinks.length - activeLinks.length;
   const withNotes = activeLinks.filter((link) => link.userNote?.trim()).length;
+  /*
+   * The erase warning counts *everything*, protected content included.
+   *
+   * This is the one screen where being generous with the number is the honest
+   * thing: an understated total on an irreversible action would be a lie about
+   * what is about to be destroyed, and the user is the person who owns all of it.
+   */
+  const eraseCounts = {
+    links: links.filter((link) => !link.isArchived).length,
+    notes: notes.length,
+    folders: folders.length,
+  };
 
   // The trash count is needed here to label the entry point, so it is read when
   // Settings opens rather than only when the Trash screen is visited.
@@ -110,9 +129,9 @@ export default function SettingsPage() {
       <Section title="Your vault">
         <div className="mx-4 overflow-hidden rounded-control border-border bg-surface border">
           <StatRow label="Saved links" value={pluralize(activeLinks.length, 'link')} />
-          <StatRow label="Notes" value={pluralize(notes.length, 'note')} />
+          <StatRow label="Notes" value={pluralize(readableNotes.length, 'note')} />
           <StatRow label="With your own note" value={pluralize(withNotes, 'link')} />
-          <StatRow label="Folders" value={pluralize(folders.length, 'folder')} />
+          <StatRow label="Folders" value={pluralize(readableFolders.length, 'folder')} />
           <StatRow label="In the Inbox" value={pluralize(inboxCount, 'link')} />
           <StatRow label="Marked unavailable" value={pluralize(unavailableCount, 'link')} />
           <StatRow label="Archived" value={pluralize(archived, 'link')} last />
@@ -198,8 +217,8 @@ export default function SettingsPage() {
         <div className="mx-4 rounded-2xl border border-danger/30 bg-danger-soft p-4">
           <p className="text-row font-semibold text-danger">Erase everything</p>
           <p className="mt-1.5 text-meta leading-relaxed text-fg/80">
-            Deletes {pluralize(activeLinks.length, 'link')}, {pluralize(notes.length, 'note')} and{' '}
-            {pluralize(folders.length, 'folder')} from this device, including anything in the trash. Export first
+            Deletes {pluralize(eraseCounts.links, 'link')}, {pluralize(eraseCounts.notes, 'note')} and{' '}
+            {pluralize(eraseCounts.folders, 'folder')} from this device, including anything in the trash. Export first
             if you want a copy — this cannot be undone.
           </p>
           <div className="mt-3.5 flex items-center justify-between gap-3">

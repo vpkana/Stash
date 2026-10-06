@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Check } from 'lucide-react';
+import { Check } from '@/components/ui/icons';
 import { parseMarkdown, renderInline, type InlineNode, type MarkdownBlock } from '@/lib/markdown';
 import { openExternal } from '@/lib/open-external';
 import { cn } from '@/lib/utils';

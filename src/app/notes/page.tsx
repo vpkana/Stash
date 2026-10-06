@@ -2,12 +2,12 @@
 
 import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, FilePlus2, Layers, Lock, MoreHorizontal, NotebookPen, Star } from 'lucide-react';
+import { ChevronLeft, ChevronRight, FilePlus2, Layers, Lock, MoreHorizontal, NotebookPen, Star } from '@/components/ui/icons';
 import type { Note, SavedLink } from '@/db/types';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { noteChildren, noteDescendantIds } from '@/lib/tree';
-import { isSealed } from '@/lib/privacy/protection';
+import { useLockState } from '@/lib/privacy/access';
 import { useRevealLocked } from '@/components/privacy/locked-row';
 import { useVaultStore } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';
@@ -41,9 +41,11 @@ function NotesView() {
   const visibleNotes = useVaultStore((state) => state.visibleNotes);
   const links = useVaultStore((state) => state.links);
   const noteLinks = useVaultStore((state) => state.noteLinks);
-  // Inherited locks count: a subnote of a locked note is encrypted too, so it
-  // must open read-only even though its own flag is false.
-  const protectedNoteIds = useVaultStore((state) => state.protection.notes);
+  // What may not be *read* right now. Inherited locks count: a subnote of a locked
+  // note is protected too, so it must open read-only even though its own flag is
+  // false — and it must open read-only only until its boundary is crossed.
+  const protectedNoteIds = useVaultStore((state) => state.hidden.notes);
+  const hiddenLinks = useVaultStore((state) => state.hidden.links);
 
   const [activeNote, setActiveNote] = React.useState<Note | null>(null);
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
@@ -63,8 +65,12 @@ function NotesView() {
       childCounts.set(note.parentNoteId, (childCounts.get(note.parentNoteId) ?? 0) + 1);
     }
 
+    // Counted from the same withheld set the lists use: a "3 links" badge on a
+    // note, where those links are locked, would be a count of something the user
+    // cannot see.
     const linkCounts = new Map<string, number>();
     for (const row of noteLinks) {
+      if (hiddenLinks.has(row.linkId)) continue;
       linkCounts.set(row.noteId, (linkCounts.get(row.noteId) ?? 0) + 1);
     }
 
@@ -90,15 +96,18 @@ function NotesView() {
           .filter((row) => row.noteId === current.id)
           .sort((a, b) => a.sortOrder - b.sortOrder)
           .map((row) => linkById.get(row.linkId))
-          .filter((link): link is SavedLink => Boolean(link)),
+          .filter((link): link is SavedLink => Boolean(link) && !hiddenLinks.has(link!.id)),
       );
     }
 
     return { childCounts, linkCounts, trail, subnotes, resources };
-  }, [current, links, noteLinks, notes, visibleNotes]);
+  }, [current, links, noteLinks, notes, visibleNotes, hiddenLinks]);
 
-  // `current` is present but unreadable: see the editor branch below.
-  const sealed = Boolean(current) && isSealed(current ?? {});
+  // `current` is present but unreadable: see the editor branch below. Asked of
+  // the central access check rather than of the ciphertext, so a deep link into a
+  // note the session has not unlocked never reaches the editor.
+  const accessed = useLockState('note', current?.id ?? null);
+  const sealed = Boolean(current) && accessed.locked;
   const { reveal, busy: revealing } = useRevealLocked();
 
   const rootNotes = React.useMemo(() => noteChildren(visibleNotes, null), [visibleNotes]);

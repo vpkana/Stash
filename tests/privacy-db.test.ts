@@ -25,7 +25,7 @@ import {
   readKeyring,
   unlockWithPasscode,
 } from '@/lib/privacy/keyring';
-import { computeProtection, hiddenIds, isSealed } from '@/lib/privacy/protection';
+import { allLockRoots, canAccess, computeProtection, hiddenIds, isSealed } from '@/lib/privacy/protection';
 import { countSealed } from '@/lib/privacy/reconcile';
 import { applyScreenPrivacy, setPrivacyScreenPlugin } from '@/lib/privacy/screen';
 import { setSecureStore, type SecureStore } from '@/lib/privacy/secure-store';
@@ -227,13 +227,16 @@ describe('locking a folder', () => {
 
     await setFolderLocked(root, true);
 
-    // Nested locked folder: the whole subtree is ciphertext.
+    // Nested locked folder: the whole subtree is protected, and the folder rows
+    // themselves keep their names. The name is the label on the lock — the only
+    // way to tell `Private` from `Banking` in a list or a destination picker —
+    // and the access model, not the ciphertext, is what keeps it back.
     for (const id of [root, nested, deepest]) {
       const folder = await db.folders.get(id);
-      expect(folder?.name, id).toBe('');
-      expect(isSealed(folder ?? {}), id).toBe(true);
+      expect(folder?.isLocked, id).toBe(id === root);
+      expect(isSealed(folder ?? {}), id).toBe(false);
     }
-    expect(JSON.stringify(await db.folders.get(nested))).not.toContain('Divorce');
+    expect((await db.folders.get(nested))?.name).toBe('Divorce');
 
     for (const id of [linkRoot, linkDeep]) {
       const link = await db.links.get(id);
@@ -266,18 +269,20 @@ describe('locking a folder', () => {
     expect((await db.links.get(id))?.url).toBe('https://a.example/moved');
   });
 
-  it('does not write a name in the clear when a locked folder is renamed', async () => {
+  it('renames a locked folder without touching what is sealed inside it', async () => {
     await enablePrivacy();
     const id = await mustFolder('Private');
+    const linkId = await mustLink('https://secret.example/invoice', id);
     await setFolderLocked(id, true);
 
     const renamed = await renameFolder(id, 'Settlement');
     expect(renamed?.name).toBe('Settlement');
 
+    // The label follows the rename; the content stays ciphertext either way.
     const stored = await db.folders.get(id);
-    expect(stored?.name).toBe('');
-    expect(JSON.stringify(stored)).not.toContain('Settlement');
-    // ...and the rename is still visible through the snapshot.
+    expect(stored?.name).toBe('Settlement');
+    expect(isSealed(stored ?? {})).toBe(false);
+    expect(isSealed((await db.links.get(linkId)) ?? {})).toBe(true);
     expect((await getSnapshot()).folders.find((folder) => folder.id === id)?.name).toBe('Settlement');
   });
 
@@ -315,7 +320,8 @@ describe('search while locked', () => {
   async function lockedSnapshot() {
     const snapshot = await getSnapshot();
     const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
-    return { snapshot, protection, hidden: hiddenIds(protection, true) };
+    // Nothing has been opened in this session, so every boundary is shut.
+    return { snapshot, protection, hidden: hiddenIds(protection, new Set()) };
   }
 
   it('returns nothing for a locked note, link or folder', async () => {
@@ -353,14 +359,14 @@ describe('search while locked', () => {
 
     const snapshot = await getSnapshot();
     const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
-    const hidden = hiddenIds(protection, false);
+    const hidden = hiddenIds(protection, allLockRoots(protection));
 
     expect(searchVault(snapshot, { query: 'Therapy', hidden }).notes).toHaveLength(1);
     expect(searchVault(snapshot, { query: 'secret.example', hidden }).links).toHaveLength(1);
     expect(searchVault(snapshot, { query: 'Private', hidden }).folders).toHaveLength(1);
   });
 
-  it('hides locked folders from the recents list', async () => {
+  it('keeps a locked folder in recents and leaves the access decision to the lock model', async () => {
     await enablePrivacy();
     const locked = await mustFolder('Private');
     const open = await mustFolder('Work');
@@ -371,9 +377,17 @@ describe('search while locked', () => {
     await setFolderLocked(locked, true);
     forgetVaultKey();
 
-    expect(await pruneRecentFolders()).toEqual([open]);
-    // The removal is persisted, not merely filtered on the way out.
-    expect(await getRecentFolderIds()).toEqual([open]);
+    // Recents is history, not a listing: forgetting that a folder was used would
+    // be the storage layer making a decision that belongs to the access check.
+    // What changes is whether the folder may be *offered*, and that is decided
+    // from the same protection the rest of the app uses.
+    expect(await pruneRecentFolders()).toEqual([open, locked]);
+
+    const snapshot = await getSnapshot();
+    const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
+    expect(canAccess(protection, new Set(), 'folder', locked)).toBe(false);
+    expect(canAccess(protection, new Set(), 'folder', open)).toBe(true);
+    expect(canAccess(protection, new Set([locked]), 'folder', locked)).toBe(true);
   });
 
   it('excludes locked subtrees from folder counts', async () => {
@@ -661,8 +675,10 @@ describe('export and import', () => {
     expect(bundle.security?.keyring?.wrappedByPasscode.ct).toBeTruthy();
     expect(JSON.stringify(bundle.security)).not.toContain('wrappedByDevice');
 
+    // Folders are never sealed: their names are labels, and the protected
+    // content inside them is what travels as ciphertext.
     expect(describeBundleLocks(bundle)).toEqual({
-      sealedFolders: 1,
+      sealedFolders: 0,
       sealedNotes: 0,
       sealedLinks: 1,
       hasKeyring: true,

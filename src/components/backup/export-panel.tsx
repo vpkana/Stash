@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Download, Loader2, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, ShieldCheck } from '@/components/ui/icons';
 import { BACKUP_MODES, type BackupMode } from '@/lib/backup/format';
 import { useBackupStore } from '@/stores/backup-store';
 import { usePrivacyStore } from '@/stores/privacy-store';

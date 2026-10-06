@@ -83,28 +83,30 @@ describe('expiry', () => {
 });
 
 describe('the unlock prompt', () => {
-  const locked = { ready: true, keyringPresent: true, unlocked: false };
-
-  it('is shown only for an item the user tapped', () => {
-    expect(shouldPromptForReveal({ ...locked, hasRevealRequest: true })).toBe(true);
-    // A cold start, a tab change, a restart: locked items are unreadable inside
-    // the app, and the app is still the app. No password to open it.
-    expect(shouldPromptForReveal({ ...locked, hasRevealRequest: false })).toBe(false);
+  it('is shown only for a boundary the user tried to cross', () => {
+    expect(shouldPromptForReveal({ ready: true, keyringPresent: true, hasRevealRequest: true })).toBe(true);
+    // A cold start, a tab change, a restart, a share arriving: protected content
+    // is unreadable inside the app, and the app is still the app. No password to
+    // open it, and nothing to ask about either, because nothing was asked for.
+    expect(shouldPromptForReveal({ ready: true, keyringPresent: true, hasRevealRequest: false })).toBe(false);
   });
 
   it('is never shown when there is nothing locked, or nothing to open', () => {
-    expect(
-      shouldPromptForReveal({ ready: true, keyringPresent: false, unlocked: true, hasRevealRequest: false }),
-    ).toBe(false);
-    // Already unlocked, so whatever was tapped is readable: the prompt would be
-    // asking a question that has been answered.
-    expect(
-      shouldPromptForReveal({ ready: true, keyringPresent: true, unlocked: true, hasRevealRequest: true }),
-    ).toBe(false);
+    // No keyring means nothing is sealed, so there is no boundary to cross.
+    expect(shouldPromptForReveal({ ready: true, keyringPresent: false, hasRevealRequest: false })).toBe(false);
+    expect(shouldPromptForReveal({ ready: true, keyringPresent: false, hasRevealRequest: true })).toBe(false);
     // Before the session is resolved there is no answer to give yet.
-    expect(shouldPromptForReveal({ ready: false, keyringPresent: true, unlocked: false, hasRevealRequest: true })).toBe(
-      false,
-    );
+    expect(shouldPromptForReveal({ ready: false, keyringPresent: true, hasRevealRequest: true })).toBe(false);
+  });
+
+  it('does not depend on whether the vault key happens to be in memory', () => {
+    // Access is per folder, so being inside one open boundary says nothing about
+    // the next one. A refusal on *this* boundary has to be visible even when the
+    // key is present, or the second protected folder the user taps would silently
+    // do nothing at all.
+    const shape = { ready: true, keyringPresent: true, hasRevealRequest: true };
+    expect(shouldPromptForReveal(shape)).toBe(true);
+    expect(Object.keys(shape)).not.toContain('unlocked');
   });
 });
 

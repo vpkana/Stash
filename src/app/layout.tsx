@@ -22,9 +22,16 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: 'cover',
+  /*
+   * The two theme colours are the *page* backgrounds, not the accent: Android's
+   * status bar and the browser's chrome sit behind the app's own top edge, so they
+   * have to match the paper. Kept in step with `--bg` in `globals.css` — this is
+   * the one place the palette has to be restated, because a manifest cannot read a
+   * custom property.
+   */
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#faf8f4' },
-    { media: '(prefers-color-scheme: dark)', color: '#151714' },
+    { media: '(prefers-color-scheme: light)', color: '#f6f7fb' },
+    { media: '(prefers-color-scheme: dark)', color: '#0c0e15' },
   ],
 };
 

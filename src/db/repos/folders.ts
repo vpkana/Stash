@@ -10,7 +10,7 @@ import {
 import { computeFolderStats, type FolderStats } from '@/lib/folder-stats';
 import { isFolderProtected } from '@/lib/privacy/context';
 import { getVaultKey } from '@/lib/privacy/keyring';
-import { isSealed, openFolder, sealFolder } from '@/lib/privacy/protection';
+import { openFolder } from '@/lib/privacy/protection';
 import { trashFolder, trashFolderShell } from './trash';
 import { reconcileProtection } from '@/lib/privacy/reconcile';
 
@@ -65,7 +65,6 @@ export async function createFolder(input: CreateFolderInput): Promise<CreateFold
   if (name.length === 0) return { ok: false, reason: 'invalid', message: 'Enter a folder name.' };
 
   const parentId = input.parentId ?? null;
-  const parentProtected = await isFolderProtected(parentId);
 
   const folders = await db.folders.toArray();
   if (parentId && !folders.some((folder) => folder.id === parentId)) {
@@ -91,9 +90,10 @@ export async function createFolder(input: CreateFolderInput): Promise<CreateFold
     isLocked: false,
   };
   if (input.icon) folder.icon = input.icon;
-  // A subfolder of a locked folder is born sealed, so its name never exists in
-  // the clear even for an instant. The plaintext record is still returned.
-  await db.folders.add(parentProtected ? await sealFolder(folder, getVaultKey()) : folder);
+  // Folder names are stored in the clear even inside a locked folder: the name is
+  // the label on the lock, and the content behind it is what stays sealed. See
+  // `reconciliation` in `@/lib/privacy/protection` for why.
+  await db.folders.add(folder);
   return { ok: true, folder };
 }
 
@@ -110,19 +110,20 @@ export async function renameFolder(id: string, rawName: string): Promise<Folder 
   const folder = folders.find((candidate) => candidate.id === id) ?? await openFolder(raw, getVaultKey());
   if (hasSiblingWithName(folders, folder.parentId, name, id)) return null;
   const updated: Folder = { ...folder, name, updatedAt: Date.now() };
-  // The new name is sealed on the way in: a rename must never write a locked
-  // folder's name in the clear.
-  await db.folders.put(isSealed(raw) ? await sealFolder(updated, getVaultKey()) : updated);
+  // The legacy ciphertext is dropped on the way out: `raw` may be a sealed row
+  // from an earlier build, and the rename is the moment its name becomes
+  // ordinary data again. Content inside it stays sealed.
+  await db.folders.put(updated);
   return updated;
 }
 
 export type MoveResult = { ok: true; folder: Folder } | { ok: false; reason: string };
 
 export async function moveFolder(id: string, targetParentId: string | null): Promise<MoveResult> {
-  // Names are compared in plaintext, then the row is put back in the form it was
-  // found in, so a sealed folder stays sealed through the move.
+  // Names are compared in plaintext, so a folder written by an earlier build
+  // (whose name was ciphertext) is opened before the move and stays readable
+  // afterwards.
   const raw = await db.folders.toArray();
-  const sealedIds = new Set(raw.filter(isSealed).map((candidate) => candidate.id));
   const folders = await Promise.all(raw.map((candidate) => openFolder(candidate, getVaultKey())));
   const folder = folders.find((candidate) => candidate.id === id);
   if (!folder) return { ok: false, reason: 'That folder no longer exists.' };
@@ -140,7 +141,7 @@ export async function moveFolder(id: string, targetParentId: string | null): Pro
     sortOrder: nextSortOrder(folders, targetParentId),
     updatedAt: Date.now(),
   };
-  await db.folders.put(sealedIds.has(updated.id) ? await sealFolder(updated, getVaultKey()) : updated);
+  await db.folders.put(updated);
   const result: MoveResult = { ok: true, folder: updated };
 
   // The destination may be inside a locked folder (seal the subtree) or outside
@@ -214,7 +215,7 @@ export async function setFolderIcon(id: string, icon: string | undefined): Promi
   const updated: Folder = { ...folder, updatedAt: Date.now() };
   if (icon) updated.icon = icon;
   else delete updated.icon;
-  await db.folders.put(isSealed(raw) ? await sealFolder(updated, getVaultKey()) : updated);
+  await db.folders.put(updated);
 }
 
 export async function getDeletionImpact(id: string): Promise<FolderDeletionImpact | null> {

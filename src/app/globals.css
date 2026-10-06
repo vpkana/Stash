@@ -3,23 +3,31 @@
 /*
  * Stash design tokens.
  *
- * The direction is **paper and ink**: a warm, quiet drawer of things worth
- * keeping. Warm off-white paper, warm near-black ink, one deep pine accent, and
- * grouped content on soft cards instead of a spreadsheet of hairlines.
+ * The direction is **daylight**: a bright, saturated interface built on a cool
+ * near-white base, one vivid primary, and a colour **identity** for everything
+ * the user named or saved.
  *
- * Four rules, and everything below serves them:
+ * Five rules, and everything below serves them:
  *
- *  1. **Warm neutrals, never blue-grey.** Every neutral carries a little amber
- *     (hue ~85). Cool grey is what made the app read as a developer tool; a warm
- *     paper tone is the same layout with a pulse.
- *  2. **Type does the work.** Five comfortable steps instead of seven cramped
- *     ones: a confident page title, 16px list titles, 15px prose. Nothing in the
- *     app is smaller than 13px, and nothing important is smaller than 15px.
- *  3. **Group, do not rule.** Content that belongs together sits on one soft card
- *     (radius, hairline, near-invisible shadow) with hairline dividers inside it.
- *     One level of grouping — a card inside a card is still wrong.
- *  4. **Colour is a signal.** One accent for the action and the selection.
- *     Semantic red/amber/green appear only where meaning requires.
+ *  1. **Colour carries meaning, never decoration.** There is one primary (used
+ *     for the action and the selection) and eight identity tones. Every tone is
+ *     assigned by *identity* — a folder's own id, a link's domain — so a colour
+ *     is a label the user learns ("YouTube is the red one", "the Studio folder is
+ *     the violet one") rather than a rainbow generated for variety. A colour that
+ *     is not carrying meaning is a bug.
+ *  2. **Cool base, vivid ink.** Neutrals are a barely-violet near-white so the
+ *     saturated tones have something calm to sit on. A warm base fights saturated
+ *     accents; a cool one lets them ring.
+ *  3. **Type does the work.** Five comfortable steps: a confident page title,
+ *     16px list titles, 15px prose. Nothing is smaller than 13px, and nothing
+ *     load-bearing is smaller than 15px.
+ *  4. **Group, do not rule.** Content that belongs together sits on one soft card
+ *     with hairline dividers inside it. One level of grouping — a card inside a
+ *     card is still wrong.
+ *  5. **Both shapes are first-class.** Mobile is the primary surface and the
+ *     phone layout is never compromised for the desktop one. But a 1400px window
+ *     is not a phone: above `lg` the app becomes a sidebar plus a centred column,
+ *     and the bottom tab bar retires.
  */
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -31,10 +39,10 @@
    * a large step reads as "grey card floating on the page", which is the look
    * being avoided.
    */
-  --bg: #faf8f4;
+  --bg: #f6f7fb;
   --surface: #ffffff;
-  --surface-2: #f3f0ea;
-  --surface-3: #e9e4da;
+  --surface-2: #eef0f7;
+  --surface-3: #e2e6f1;
 
   /* --- Text ---------------------------------------------------------------
    * Three weights of ink, each with one job. `muted-fg` is the honest
@@ -42,51 +50,77 @@
    * still clears 4.5:1, because metadata on a phone in daylight is not optional
    * information.
    */
-  --fg: #1f1d19;
-  --muted-fg: #5a564d;
-  --subtle-fg: #726d62;
+  --fg: #14161f;
+  --muted-fg: #545a70;
+  --subtle-fg: #6a7085;
 
   /* --- Lines --------------------------------------------------------------
    * `hairline` separates content inside a group (a list, a card). `border`
    * outlines a control the user can touch. Keeping them distinct is what stops
    * every row from needing a box.
    */
-  --hairline: #ebe6dc;
-  --border: #d9d3c6;
-  --border-strong: #bdb4a2;
+  --hairline: #e7e9f3;
+  --border: #d2d6e6;
+  --border-strong: #a9b0c8;
 
   /* --- Accent -------------------------------------------------------------
-   * Deep pine. Used for: the one primary action, the current selection, and
-   * focus. Never for decoration. It is the colour of the app icon's tile family,
-   * which is what makes the logo and the interface read as one thing.
+   * Vivid indigo. Used for: the one primary action, the current selection, focus.
+   * Never for decoration — that is what the identity tones are for.
    */
-  --accent: #0b6b58;
-  --accent-hover: #085545;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
   --accent-fg: #ffffff;
-  --accent-soft: #ddf0e9;
+  --accent-soft: #e9e7ff;
 
   /* --- Brand --------------------------------------------------------------
-   * Fixed, theme-independent. The icon is the same object in light and dark, and
-   * the mark on it is cream on ink in both.
+   * Fixed, theme-independent: the tile the app icon is drawn on, and the mark
+   * that sits on it. Same object in light and dark.
    */
-  --brand-ink: #182a24;
-  --brand-cream: #f6f1e7;
+  --brand-ink: #1b1a4d;
+  --brand-cream: #ffffff;
+
+  /*
+   * --- Identity tones -----------------------------------------------------
+   * Eight hues, each as a vivid *foreground* and a tinted *background* so a tile
+   * or a badge can be coloured with real saturation and still be readable.
+   *
+   * They are assigned by identity (see `src/lib/identity-color.ts`), which is
+   * what makes them information rather than decoration. Every pair below clears
+   * 4.5:1 — these are labels, and a label nobody can read is worse than a grey
+   * one.
+   */
+  --id-rose: #be123c;
+  --id-rose-soft: #ffe4e9;
+  --id-orange: #c2410c;
+  --id-orange-soft: #ffedda;
+  --id-amber: #92620a;
+  --id-amber-soft: #fdf1cd;
+  --id-emerald: #047857;
+  --id-emerald-soft: #d5f7e8;
+  --id-cyan: #0e7490;
+  --id-cyan-soft: #d3f2fa;
+  --id-blue: #1d4ed8;
+  --id-blue-soft: #dee8ff;
+  --id-violet: #6d28d9;
+  --id-violet-soft: #eae4ff;
+  --id-fuchsia: #a21caf;
+  --id-fuchsia-soft: #fbe4fb;
 
   /* --- Semantic ---------------------------------------------------------- */
-  --danger: #b4231b;
-  --danger-soft: #fbe8e4;
-  --success: #1b7a4b;
-  --warning: #a9741a;
+  --danger: #c0261e;
+  --danger-soft: #ffe6e3;
+  --success: #047857;
+  --warning: #92620a;
 
-  --overlay: rgb(31 29 25 / 0.34);
+  --overlay: rgb(20 22 31 / 0.4);
   /*
    * Three shadows, each with a job: a sheet is above everything, a raised
    * surface is a button off the page, and a card is content that has an edge.
    * All three are warm-tinted rather than black, so they sit in the paper.
    */
-  --elevation-sheet: 0 -16px 48px rgb(31 29 25 / 0.16);
-  --elevation-raised: 0 2px 12px -2px rgb(31 29 25 / 0.14);
-  --elevation-card: 0 1px 2px rgb(31 29 25 / 0.04), 0 10px 24px -16px rgb(31 29 25 / 0.14);
+  --elevation-sheet: 0 -16px 48px rgb(20 22 31 / 0.18);
+  --elevation-raised: 0 2px 14px -2px rgb(20 22 31 / 0.16);
+  --elevation-card: 0 1px 2px rgb(20 22 31 / 0.05), 0 12px 28px -18px rgb(20 22 31 / 0.16);
 
   /* --- System chrome ------------------------------------------------------
    * The air kept between the app's own chrome and the system bars, *on top of*
@@ -100,31 +134,50 @@
 }
 
 .dark {
-  --bg: #151714;
-  --surface: #1d1f1b;
-  --surface-2: #252721;
-  --surface-3: #30322b;
+  --bg: #0c0e15;
+  --surface: #161922;
+  --surface-2: #1e222d;
+  --surface-3: #292d3a;
 
   /* Not pure white, and not pure black behind it. */
-  --fg: #f1eee7;
-  --muted-fg: #a8a498;
-  --subtle-fg: #938e82;
+  --fg: #edf0f7;
+  --muted-fg: #a3a9be;
+  --subtle-fg: #8a90a6;
 
-  --hairline: #2a2c26;
-  --border: #3c3e36;
-  --border-strong: #55574c;
+  --hairline: #222633;
+  --border: #313647;
+  --border-strong: #474e64;
 
-  --accent: #5dcbaf;
-  --accent-hover: #7bdfc4;
-  --accent-fg: #07231d;
-  --accent-soft: #16332b;
+  --accent: #a5b4fc;
+  --accent-hover: #c3ccff;
+  --accent-fg: #191a4d;
+  --accent-soft: #262a52;
 
-  --danger: #e98c84;
-  --danger-soft: #3a2320;
-  --success: #6fd39b;
-  --warning: #dfb25a;
+  /* The same eight identities, lifted: a bright glyph on a deep tint reads the
+     same on a phone at night as the light pair does in daylight. */
+  --id-rose: #fda4af;
+  --id-rose-soft: #3c1521;
+  --id-orange: #fdba74;
+  --id-orange-soft: #3d2210;
+  --id-amber: #fcd34d;
+  --id-amber-soft: #382d11;
+  --id-emerald: #6ee7b7;
+  --id-emerald-soft: #0f3126;
+  --id-cyan: #67e8f9;
+  --id-cyan-soft: #0d3039;
+  --id-blue: #93c5fd;
+  --id-blue-soft: #13274c;
+  --id-violet: #c4b5fd;
+  --id-violet-soft: #251b4e;
+  --id-fuchsia: #f0abfc;
+  --id-fuchsia-soft: #36153c;
 
-  --overlay: rgb(6 8 6 / 0.62);
+  --danger: #fca5a5;
+  --danger-soft: #3d1d1d;
+  --success: #6ee7b7;
+  --warning: #fcd34d;
+
+  --overlay: rgb(4 5 9 / 0.68);
   --elevation-sheet: 0 -16px 48px rgb(0 0 0 / 0.5);
   --elevation-raised: 0 2px 12px -2px rgb(0 0 0 / 0.45);
   --elevation-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 24px -16px rgb(0 0 0 / 0.5);
@@ -154,6 +207,24 @@
   --color-brand-ink: var(--brand-ink);
   --color-brand-cream: var(--brand-cream);
 
+  /* The eight identities, as `text-id-*` / `bg-id-*-soft` pairs. */
+  --color-id-rose: var(--id-rose);
+  --color-id-rose-soft: var(--id-rose-soft);
+  --color-id-orange: var(--id-orange);
+  --color-id-orange-soft: var(--id-orange-soft);
+  --color-id-amber: var(--id-amber);
+  --color-id-amber-soft: var(--id-amber-soft);
+  --color-id-emerald: var(--id-emerald);
+  --color-id-emerald-soft: var(--id-emerald-soft);
+  --color-id-cyan: var(--id-cyan);
+  --color-id-cyan-soft: var(--id-cyan-soft);
+  --color-id-blue: var(--id-blue);
+  --color-id-blue-soft: var(--id-blue-soft);
+  --color-id-violet: var(--id-violet);
+  --color-id-violet-soft: var(--id-violet-soft);
+  --color-id-fuchsia: var(--id-fuchsia);
+  --color-id-fuchsia-soft: var(--id-fuchsia-soft);
+
   /*
    * --- Type scale ---------------------------------------------------------
    * Six steps, each with one job. New UI picks a step; it does not pick a
@@ -174,6 +245,14 @@
   --text-display: 1.75rem;
   --text-display--line-height: 1.15;
   --text-display--letter-spacing: -0.022em;
+  /*
+   * One step above `display`, for the two places the app is allowed to shout:
+   * a page title on a wide screen and the sign-off in Settings. It exists so
+   * those two do not invent their own size.
+   */
+  --text-hero: 2.125rem;
+  --text-hero--line-height: 1.1;
+  --text-hero--letter-spacing: -0.028em;
   --text-title: 1.1875rem;
   --text-title--line-height: 1.25;
   --text-title--letter-spacing: -0.015em;
@@ -412,6 +491,47 @@
   border: 1px solid var(--hairline);
   background-color: var(--surface);
   box-shadow: var(--elevation-card);
+}
+
+/*
+ * The content column.
+ *
+ * Every screen's body sits in this, so the reading width is decided in one
+ * place. On a phone it is the full width, which is what the phone wants; on a
+ * desktop it stops growing, because a 1400px-wide paragraph is not more useful
+ * than a 700px one — it is just harder to read.
+ */
+@utility column {
+  width: 100%;
+  max-width: 44rem;
+  margin-inline: auto;
+}
+
+/*
+ * A leading identity tile.
+ *
+ * The single most common new element in the redesign: a rounded square holding
+ * an icon, coloured by the identity of the thing it labels. Its size and radius
+ * are fixed here so forty rows cannot drift into forty slightly different
+ * squares.
+ */
+@utility tile {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  border-radius: 0.875rem;
+}
+
+/*
+ * Desktop-only sidebar rows and the mobile tab bar share one active treatment,
+ * so "where am I" looks the same in both shapes of the app.
+ */
+@utility nav-active {
+  background-color: var(--accent-soft);
+  color: var(--accent);
 }
 
 /* Tap feedback that does not rely on hover, which phones do not have. */

@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { create } from 'zustand';
-import { CircleCheck, Info, AlertTriangle, X } from 'lucide-react';
+import { CircleCheck, Info, AlertTriangle, X } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 
 /**

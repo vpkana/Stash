@@ -1,6 +1,6 @@
 import { db } from '@/db';
 import { getVaultKey } from './keyring';
-import { computeProtection, isSealed, openFolder, openLink, openNote, sealFolder, sealLink, sealNote } from './protection';
+import { computeProtection, isSealed, openFolder, openLink, openNote, sealLink, sealNote } from './protection';
 
 /**
  * Keep the database's sealing in step with the lock state.
@@ -65,10 +65,22 @@ export async function reconcileProtection(): Promise<ReconcileReport> {
     return true;
   };
 
+  /*
+   * Folders are never sealed.
+   *
+   * A folder name is the label on the door rather than what is behind it, and
+   * only the label makes a locked folder usable: "Private" is tappable and
+   * choosable, an anonymous "Locked folder" is not — least of all in the share
+   * destination picker, where the user has to say *which* locked folder a link
+   * is going into. Content stays sealed; a folder row does not.
+   *
+   * The `target` is therefore always "open", which is also the migration for a
+   * vault written by an earlier build: its sealed folder rows are opened here,
+   * once, the first time a key is available.
+   */
   for (const folder of folders) {
-    const target = protection.folders.has(folder.id);
-    if (!settle(target, isSealed(folder), 'folders')) continue;
-    writes.push(db.folders.put(target ? await sealFolder(folder, key) : await openFolder(folder, key)));
+    if (!settle(false, isSealed(folder), 'folders')) continue;
+    writes.push(db.folders.put(await openFolder(folder, key)));
   }
 
   for (const note of notes) {

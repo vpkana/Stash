@@ -87,12 +87,19 @@ describe('a locked folder in the tree', () => {
     const state = useVaultStore.getState();
     const locked = state.folders.find((folder) => folder.id === ids.secret);
     expect(locked).toBeDefined();
-    expect(locked?.name).toBe('');
-    expect(isSealed(locked ?? {})).toBe(true);
-    // And it is still published as hidden, so content surfaces skip it.
+    // The name stays: it is the label on the lock, and without it the user could
+    // not tell which protected folder a row was, or choose one as a destination.
+    expect(locked?.name).toBe('Divorce');
+    // It is published as hidden, so every content surface skips it and every
+    // listing counts it as absent.
     expect(state.hidden.folders.has(ids.secret)).toBe(true);
-    // The row on disk is what an attacker would read: no name anywhere.
-    expect(JSON.stringify(await db.folders.get(ids.secret))).not.toContain('Divorce');
+    // What is *inside* is what an attacker would be reading, and none of it is
+    // in the clear on disk: the folder's link is ciphertext with no URL, title or
+    // note left to read.
+    const storedLink = await db.links.get(ids.inside);
+    expect(isSealed(storedLink ?? {})).toBe(true);
+    expect(JSON.stringify(storedLink)).not.toContain('lawyer');
+    expect(state.hidden.links.has(ids.inside)).toBe(true);
 
     // Unlocked items are untouched beside it.
     expect(state.folders.find((folder) => folder.id === ids.open)?.name).toBe('Development');
@@ -112,13 +119,20 @@ describe('a locked folder in the tree', () => {
     expect(state.hidden.links.has(ids.inside)).toBe(true);
   });
 
-  it('is counted, because the row is on screen', async () => {
+  it('contributes no counts while its boundary is shut', async () => {
     const ids = await arrangeLockedFolder();
     forgetVaultKey();
     await useVaultStore.getState().refresh();
 
-    const stats = useVaultStore.getState().folderStats.get(ids.secret);
-    expect(stats?.directLinks).toBe(1);
+    // A count is a listing: "1 link" beside a folder the user cannot open tells
+    // them something is in there and roughly how much. The locked folder gets no
+    // entry at all rather than a row of zeroes, which would say the same thing
+    // less precisely.
+    const stats = useVaultStore.getState().folderStats;
+    expect(stats.has(ids.secret)).toBe(false);
+    // Its parent is visible, but the hidden child is not counted into it either.
+    expect(stats.get(ids.parent)).toEqual({ directLinks: 0, nestedLinks: 0, directChildren: 0 });
+    expect(stats.get(ids.open)).toEqual({ directLinks: 0, nestedLinks: 0, directChildren: 0 });
   });
 
   it('never appears in search, locked or not', async () => {
@@ -155,19 +169,23 @@ describe('a locked folder in the tree', () => {
     expect(byName.folders).toHaveLength(0);
   });
 
-  it('becomes readable again after unlocking, with nothing re-fetched by hand', async () => {
+  it('becomes readable again after the boundary is crossed', async () => {
     const ids = await arrangeLockedFolder();
     forgetVaultKey();
     await useVaultStore.getState().refresh();
     expect(isSessionLocked()).toBe(true);
 
-    const unlocked = await usePrivacyStore.getState().unlock(PASSCODE);
-    expect(unlocked.ok).toBe(true);
+    // The request queues the gate, and the passcode answers it — the same path
+    // a legacy vault takes, and the only path that grants anything.
+    expect((await usePrivacyStore.getState().requestAccess({ kind: 'folder', id: ids.secret, root: ids.secret })).ok).toBe(false);
+    expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
     await useVaultStore.getState().refresh();
 
     const state = useVaultStore.getState();
-    expect(state.folders.find((folder) => folder.id === ids.secret)?.name).toBe('Divorce');
-    expect(state.hidden.folders.size).toBe(0);
+    expect(state.hidden.folders.has(ids.secret)).toBe(false);
+    expect(state.hidden.links.has(ids.inside)).toBe(false);
+    // The sibling branch was never protected, so it never had to be opened.
+    expect(state.hidden.folders.has(ids.open)).toBe(false);
   });
 });
 
@@ -179,31 +197,55 @@ describe('tapping a locked row', () => {
     forgetVaultKey();
     await useVaultStore.getState().refresh();
 
-    const result = await usePrivacyStore.getState().requestReveal('folder', ids.secret);
+    const result = await usePrivacyStore
+      .getState()
+      .requestAccess({ kind: 'folder', id: ids.secret, root: ids.secret });
     expect(result.ok).toBe(true);
     expect(isSessionLocked()).toBe(false);
     expect(usePrivacyStore.getState().revealRequest).toBeNull();
+    // Only the boundary that was asked for opened.
+    expect(usePrivacyStore.getState().grantedRoots).toEqual([ids.secret]);
   });
 
   it('queues the request when there is no device path, so the gate can ask', async () => {
     const ids = await arrangeLockedFolder();
     forgetVaultKey();
     // No device wrap was armed, so the prompt is the passcode.
-    const result = await usePrivacyStore.getState().requestReveal('folder', ids.secret);
+    const result = await usePrivacyStore
+      .getState()
+      .requestAccess({ kind: 'folder', id: ids.secret, root: ids.secret });
 
     expect(result.ok).toBe(false);
     expect(isSessionLocked()).toBe(true);
-    expect(usePrivacyStore.getState().revealRequest).toEqual({ kind: 'folder', id: ids.secret });
+    expect(usePrivacyStore.getState().revealRequest).toEqual({
+      kind: 'folder',
+      id: ids.secret,
+      root: ids.secret,
+    });
 
     // Using the passcode satisfies it: the queued request goes away with it.
     expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
     expect(usePrivacyStore.getState().revealRequest).toBeNull();
   });
 
-  it('does not queue anything for a vault that is already open', async () => {
+  it('never asks twice for a boundary that is already open', async () => {
     const ids = await arrangeLockedFolder();
-    const result = await usePrivacyStore.getState().requestReveal('link', ids.inside);
+    usePrivacyStore.getState().grant(ids.secret);
+
+    const result = await usePrivacyStore
+      .getState()
+      .requestAccess({ kind: 'link', id: ids.inside, root: ids.secret });
     expect(result.ok).toBe(true);
     expect(usePrivacyStore.getState().revealRequest).toBeNull();
+  });
+
+  it('leaving the app ends every open boundary', async () => {
+    const ids = await arrangeLockedFolder();
+    usePrivacyStore.getState().grant(ids.secret);
+    expect(usePrivacyStore.getState().grantedRoots).toEqual([ids.secret]);
+
+    usePrivacyStore.getState().handleBackground();
+    expect(usePrivacyStore.getState().grantedRoots).toEqual([]);
+    expect(isSessionLocked()).toBe(true);
   });
 });

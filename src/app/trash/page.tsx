@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, RotateCcw, ShieldAlert, Trash2 } from 'lucide-react';
+import { ArrowLeft, Loader2, RotateCcw, ShieldAlert, Trash2 } from '@/components/ui/icons';
 import type { TrashEntry } from '@/db/types';
 import { pluralize, formatShortDate } from '@/lib/format';
 import { describeTrashEntry } from '@/lib/trash';

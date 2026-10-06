@@ -2,12 +2,13 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Inbox as InboxIcon, Loader2, FolderInput, Sparkles } from 'lucide-react';
+import { ArrowLeft, Inbox as InboxIcon, Loader2, FolderInput, Sparkles } from '@/components/ui/icons';
 import type { Folder, SavedLink } from '@/db/types';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { destinationLabel, type DestinationSelection } from '@/lib/destination';
 import { useVaultStore, selectInboxLinks } from '@/stores/vault-store';
+import { requireFolderAccess } from '@/lib/privacy/access';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, PageTitle, Section } from '@/components/ui/page';
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -51,6 +52,14 @@ export default function InboxPage() {
 
   const fileAll = async (selection: DestinationSelection) => {
     const folderId = selection.kind === 'folder' ? selection.folderId : null;
+    // Filing is a write into the destination, so the boundary is checked at the
+    // write as well as at the picker. A protected folder that stayed shut leaves
+    // the Inbox exactly as it was rather than swallowing the links.
+    if (folderId && !(await requireFolderAccess(folderId))) {
+      setFilingAll(false);
+      toast('That folder stayed locked, so nothing was filed.', { tone: 'danger' });
+      return;
+    }
     const targets = [...inbox];
     setBusy(true);
     // Sequential on purpose: each move is its own transaction, and a vault with

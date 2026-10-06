@@ -18,7 +18,7 @@ import {
   Quote,
   Unlock,
   X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import type { Note } from '@/db/types';
 import { autosaveLabel } from '@/lib/autosave';
 import {
@@ -277,7 +277,7 @@ export function NoteEditor({ note, save, readOnly = false, onUnlock }: NoteEdito
               type="button"
               onClick={() => setLinkDraft(null)}
               aria-label="Cancel link"
-              className="tap flex size-10 items-center justify-center rounded-xl text-subtle active:bg-surface-2"
+              className="tap tile text-subtle active:bg-surface-2"
             >
               <X size={18} strokeWidth={2} aria-hidden />
             </button>
