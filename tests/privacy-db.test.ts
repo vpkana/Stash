@@ -20,6 +20,7 @@ import {
   enableDeviceUnlock,
   forgetVaultKey,
   hasKeyring,
+  hasPasscodeWrap,
   isDeviceUnlockReady,
   isSessionLocked,
   readKeyring,
@@ -105,13 +106,12 @@ async function enablePrivacy(passcode = PASSCODE): Promise<void> {
 }
 
 /**
- * A vault set up the way an older build set one up: a passcode is the only key.
+ * A vault whose only wrap is a passcode.
  *
- * The app no longer offers this — locking is turned on with the device prompt,
- * and Stash keeps no passcode of its own — but the shape still matters for two
- * reasons, both about not losing data: an existing user's vault looks like this,
- * and a backup written by an older build adopts exactly this keyring. So the
- * passcode paths stay exercised here even though nothing creates one.
+ * This is what the setup path produces today (a passcode first, the device
+ * prompt as an addition), and it is also the shape a backup written by an older
+ * build adopts. Tests that do not care about the device prompt use it to get to a
+ * locked, unlocked session in one step.
  */
 async function enableLegacyPasscodeVault(passcode = PASSCODE): Promise<void> {
   await enablePrivacy(passcode);
@@ -611,6 +611,194 @@ describe('device unlock', () => {
     expect(await isDeviceUnlockReady()).toBe(false);
     forgetVaultKey();
     expect(await unlockWithPasscode(PASSCODE)).not.toBeNull();
+  });
+});
+
+describe('the passcode as the way in', () => {
+  it('sets up locking on a device that cannot prompt at all', async () => {
+    // The device offers nothing: no biometrics enrolled, no screen lock. Before
+    // this change that meant locking was simply unavailable here.
+    setDeviceAuthenticator(NO_DEVICE_AUTH);
+    setSecureStore(null);
+
+    const result = await usePrivacyStore.getState().createWithPasscode(PASSCODE);
+    expect(result.ok).toBe(true);
+
+    const store = () => usePrivacyStore.getState();
+    expect(store().keyringPresent).toBe(true);
+    expect(store().passcodeSet).toBe(true);
+    expect(store().deviceUnlockReady).toBe(false);
+    expect(store().unlocked).toBe(true);
+    expect(store().settings.biometric).toBe(false);
+
+    // And the folder it protects is reachable after a restart, with nothing but
+    // the passcode — no device prompt anywhere in the story.
+    const folder = await mustFolder('Private');
+    await setFolderLocked(folder, true);
+    store().lock();
+    expect(isSessionLocked()).toBe(true);
+
+    // Tapping the folder is what asks: there is no device prompt to answer, so
+    // the request is queued for the passcode gate.
+    const asked = await store().requestAccess({ kind: 'folder', id: folder, root: folder });
+    expect(asked.ok).toBe(false);
+    expect(store().revealRequest?.root).toBe(folder);
+
+    const reopened = await store().unlock(PASSCODE);
+    expect(reopened.ok).toBe(true);
+    expect(store().grantedRoots).toContain(folder);
+    expect(isSessionLocked()).toBe(false);
+  });
+
+  it('refuses a passcode below the floor, and writes no keyring', async () => {
+    const short = await usePrivacyStore.getState().createWithPasscode('12345');
+    expect(short.ok).toBe(false);
+    expect(await hasKeyring()).toBe(false);
+  });
+
+  /**
+   * The reported failure, exactly.
+   *
+   * Lock a folder with biometrics armed, open it with biometrics, turn biometrics
+   * off, and try the same folder again. It has to ask for the passcode — and the
+   * passcode has to open it — because the alternative is a settings switch that
+   * costs access to the user's own data.
+   */
+  it('falls back to the passcode when the biometric option is turned off', async () => {
+    setSecureStore(memorySecureStore());
+    setDeviceAuthenticator(createStaticAuthenticator({ ok: true }));
+    await usePrivacyStore.getState().createWithPasscode(PASSCODE);
+    await usePrivacyStore.getState().armBiometrics();
+    expect(usePrivacyStore.getState().deviceUnlockReady).toBe(true);
+
+    const folder = await mustFolder('Private');
+    await setFolderLocked(folder, true);
+    const store = () => usePrivacyStore.getState();
+
+    // 1-2. Open it with the device prompt.
+    const biometric = await store().unlockWithBiometrics(folder);
+    expect(biometric.ok).toBe(true);
+    expect(store().grantedRoots).toContain(folder);
+
+    // 3. Turn the biometric option off. This removes one wrap and nothing else.
+    await store().disarmBiometrics();
+    expect(store().deviceUnlockReady).toBe(false);
+    expect(store().passcodeSet).toBe(true);
+    store().lock();
+
+    // 4-5. The same folder again: no device prompt exists, so the request cannot
+    // be answered and the passcode gate is raised for it.
+    const asked = await store().requestAccess({ kind: 'folder', id: folder, root: folder });
+    expect(asked.ok).toBe(false);
+    expect(store().revealRequest?.root).toBe(folder);
+    expect(isSessionLocked()).toBe(true);
+
+    // 6. A wrong passcode opens nothing.
+    const wrong = await store().unlock('definitely not it');
+    expect(wrong.ok).toBe(false);
+    expect(isSessionLocked()).toBe(true);
+    expect(store().grantedRoots).not.toContain(folder);
+
+    // 7. The right one opens it.
+    const right = await store().unlock(PASSCODE);
+    expect(right.ok).toBe(true);
+    expect(store().grantedRoots).toContain(folder);
+    expect(isSessionLocked()).toBe(false);
+
+    // 8. Re-arming the device prompt leaves the passcode working too.
+    await store().armBiometrics();
+    expect(store().deviceUnlockReady).toBe(true);
+    store().lock();
+    expect((await store().unlock(PASSCODE)).ok).toBe(true);
+  });
+
+  it('replaces the passcode without touching what is encrypted', async () => {
+    await enablePrivacy(PASSCODE);
+    const folder = await mustFolder('Private');
+    const link = await mustLink('https://example.com/secret', folder);
+    await setFolderLocked(folder, true);
+    const sealedBefore = await countSealed();
+
+    const changed = await usePrivacyStore.getState().setPasscode('a different secret');
+    expect(changed.ok).toBe(true);
+
+    // The same rows are still sealed — a passcode change re-wraps 32 bytes and
+    // re-encrypts nothing.
+    expect(await countSealed()).toEqual(sealedBefore);
+    expect(isSealed((await db.links.get(link)) ?? {})).toBe(true);
+
+    forgetVaultKey();
+    expect(await unlockWithPasscode(PASSCODE)).toBeNull();
+    expect(await unlockWithPasscode('a different secret')).not.toBeNull();
+  });
+
+  it('refuses to remove the passcode when it is the only way in', async () => {
+    await enablePrivacy();
+    const removed = await usePrivacyStore.getState().removePasscode(PASSCODE);
+    expect(removed.ok).toBe(false);
+    expect(removed.message).toContain('only way');
+    // Nothing was written: the vault still opens exactly as it did.
+    forgetVaultKey();
+    expect(await unlockWithPasscode(PASSCODE)).not.toBeNull();
+  });
+
+  it('removes the passcode only once the device prompt can stand alone', async () => {
+    setSecureStore(memorySecureStore());
+    setDeviceAuthenticator(createStaticAuthenticator({ ok: true }));
+    await enablePrivacy();
+    expect(await enableDeviceUnlock()).toBe(true);
+
+    const store = () => usePrivacyStore.getState();
+    store().unlock(PASSCODE);
+    await store().refreshCapabilities();
+    const removed = await store().removePasscode(PASSCODE);
+    expect(removed.ok).toBe(true);
+    expect(store().passcodeSet).toBe(false);
+
+    forgetVaultKey();
+    expect(await unlockWithPasscode(PASSCODE)).toBeNull();
+    expect(await isDeviceUnlockReady()).toBe(true);
+    expect((await store().unlockWithBiometrics()).ok).toBe(true);
+  });
+
+  it('opens every boundary at once, and changes nothing on disk', async () => {
+    await enablePrivacy();
+    const first = await mustFolder('Private');
+    const second = await mustFolder('Banking');
+    const inFirst = await mustLink('https://example.com/one', first);
+    const inSecond = await mustLink('https://example.com/two', second);
+    await setFolderLocked(first, true);
+    await setFolderLocked(second, true);
+
+    const snapshot = await getSnapshot();
+    const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
+    const roots = [...allLockRoots(protection)];
+    expect(roots).toHaveLength(2);
+
+    // Nothing is open yet, so both folders are withheld.
+    const before = hiddenIds(protection, new Set(usePrivacyStore.getState().grantedRoots));
+    expect(before.folders.has(first)).toBe(true);
+    expect(before.folders.has(second)).toBe(true);
+
+    usePrivacyStore.getState().grantAll(roots);
+
+    // Everything is readable for the session...
+    const granted = new Set(usePrivacyStore.getState().grantedRoots);
+    expect(hiddenIds(protection, granted).folders.size).toBe(0);
+    expect(canAccess(protection, granted, 'link', inFirst)).toBe(true);
+    expect(canAccess(protection, granted, 'link', inSecond)).toBe(true);
+
+    // ...and not one lock flag, sealed row or setting was touched, which is what
+    // makes it safe to offer as a recovery action rather than a configuration
+    // change.
+    expect(await countSealed()).toEqual({ folders: 0, notes: 0, links: 2 });
+    expect((await db.folders.get(first))?.isLocked).toBe(true);
+    expect((await db.folders.get(second))?.isLocked).toBe(true);
+    expect(await hasPasscodeWrap()).toBe(true);
+
+    // Ending the session closes it all again.
+    usePrivacyStore.getState().lock();
+    expect(usePrivacyStore.getState().grantedRoots).toEqual([]);
   });
 });
 

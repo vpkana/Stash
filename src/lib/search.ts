@@ -18,13 +18,14 @@ import { emptyHidden, hiddenIds, type HiddenIds, type Protection } from '@/lib/p
 /**
  * The vault filters.
  *
- * `archived` is the only filter that *widens* rather than narrows: archived
- * items are hidden from every other filter, and this is the one deliberate way
- * to see them. Burying them behind a filter rather than a separate screen keeps
- * "where did that go?" answerable by the same search box that answers everything
- * else — one place to look, always.
+ * Every one of these *narrows*. There used to be a sixth — `archived` — which
+ * widened instead, showing rows that every other filter hid, and it was the only
+ * way back to a link somebody had archived by accident. A filter that is the only
+ * route to your own data is a bug in the shape of a feature, so the archive is
+ * gone, the rows were restored by a migration, and a link saved once is now
+ * visible under every filter that applies to it.
  */
-export type SearchFilter = 'all' | 'links' | 'notes' | 'favorites' | 'recent' | 'archived';
+export type SearchFilter = 'all' | 'links' | 'notes' | 'favorites' | 'recent';
 
 export const SEARCH_FILTERS: ReadonlyArray<{ id: SearchFilter; label: string }> = [
   { id: 'all', label: 'All' },
@@ -32,8 +33,19 @@ export const SEARCH_FILTERS: ReadonlyArray<{ id: SearchFilter; label: string }> 
   { id: 'notes', label: 'Notes' },
   { id: 'favorites', label: 'Favorites' },
   { id: 'recent', label: 'Recent' },
-  { id: 'archived', label: 'Archived' },
 ];
+
+/**
+ * Coerce a filter id from a URL into one this build still has.
+ *
+ * `?filter=archived` was a real address — it is written into Settings, and it is
+ * in the history of anyone who ever used the Archive. A saved link must land on a
+ * page rather than on an unsupported value, so an unknown (or removed) id falls
+ * back to `all`.
+ */
+export function searchFilterFrom(value: string | null | undefined): SearchFilter {
+  return SEARCH_FILTERS.some((entry) => entry.id === value) ? (value as SearchFilter) : 'all';
+}
 
 export interface VaultSnapshot {
   folders: Folder[];
@@ -281,11 +293,6 @@ function passesLinkFilter(link: SavedLink, filter: SearchFilter, hidden: HiddenI
   // result under any filter, including an empty query, a favourites filter or a
   // recency listing. There is no filter combination that reveals it.
   if (hidden.links.has(link.id)) return false;
-  // Archiving is a separate axis from the other filters, so it is decided before
-  // them: the Archived filter shows archived items and nothing else, and every
-  // other filter shows live items only.
-  if (filter === 'archived') return link.isArchived;
-  if (link.isArchived) return false;
   switch (filter) {
     case 'favorites':
       return link.isFavorite;
@@ -304,8 +311,6 @@ function passesNoteFilter(note: Note, filter: SearchFilter, hidden: HiddenIds): 
   // A locked note contributes neither its title nor its path nor its body to
   // search. `prepareNotes` never even reaches it.
   if (hidden.notes.has(note.id)) return false;
-  if (filter === 'archived') return note.isArchived;
-  if (note.isArchived) return false;
   switch (filter) {
     case 'favorites':
       return note.isFavorite;
@@ -379,11 +384,10 @@ export function searchVault(snapshot: VaultSnapshot, options: SearchOptions): Se
         matched: [] as string[],
       }));
 
-    // Folders have no archived state, so under the Archived filter the folder
-    // group is empty rather than misleadingly full. Favorites narrows folders to
-    // the starred ones, which is what makes "all my favorites" one list.
+    // Favorites narrows folders to the starred ones, which is what makes "all my
+    // favorites" one list.
     const folders =
-      includeFolders && filter !== 'archived'
+      includeFolders
         ? snapshot.folders
             .filter((folder) => !hidden.folders.has(folder.id))
             .filter((folder) => (filter === 'favorites' ? folder.isFavorite : true))
@@ -431,7 +435,7 @@ export function searchVault(snapshot: VaultSnapshot, options: SearchOptions): Se
     }
 
     const folders: FolderHit[] = [];
-    if (includeFolders && filter !== 'archived') {
+    if (includeFolders) {
       for (const folder of snapshot.folders) {
         if (hidden.folders.has(folder.id)) continue;
         if (filter === 'favorites' && !folder.isFavorite) continue;

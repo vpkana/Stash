@@ -5,8 +5,17 @@
     A vector rather than a bitmap because the launcher draws this at sizes from
     48dp to 192dp and a PNG only looks right at the density it was rendered for.
     The geometry is the same path as `public/icons/foreground.svg`, scaled into
-    the 108-unit adaptive canvas so the mark fills the 66-unit safe zone — the
-    region every launcher mask (circle, squircle, teardrop) is guaranteed to keep.
+    the 108-unit adaptive canvas.
+
+    The scale is 0.22, and that number is the fix for an icon that was drawn too
+    large. Android masks an adaptive icon to whatever shape the launcher uses, and
+    the region guaranteed to survive every one of those shapes is a 66-unit circle
+    centred on the 108-unit canvas. At the old `0.27637` the ribbon's box was
+    40.5 by 63.0 units — a half-diagonal of 41.3 against a safe radius of 33 — so
+    its bottom tips fell outside the circle and a round mask sliced them off. At
+    `0.22` the box is 40.5 by 50.2 units, half-diagonal 32.3, comfortably inside,
+    and the mark occupies 46% of the canvas, which is the proportion Google's own
+    adaptive icons use.
 
     The colour is `brand_cream`, the same value as the `brand.cream` custom
     property in `src/app/globals.css`; the tile behind it is `brand_ink`. The icon
@@ -24,8 +33,8 @@
     <group
         android:translateX="54"
         android:translateY="53.6"
-        android:scaleX="0.27637"
-        android:scaleY="0.27637">
+        android:scaleX="0.22"
+        android:scaleY="0.22">
         <group
             android:translateX="-256"
             android:translateY="-254">

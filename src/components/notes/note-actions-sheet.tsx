@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 import {
-  Archive,
   ArrowLeft,
   Check,
   FilePlus2,
@@ -51,6 +50,7 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
   const router = useRouter();
   const notes = useVaultStore((state) => state.notes);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
+  const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
   const protectedId = note?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.notes.has(protectedId));
   const [mode, setMode] = React.useState<Mode>('actions');
@@ -209,7 +209,7 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
             </div>
           ) : mode === 'move' ? (
             <NotePicker
-              notes={notes.filter((candidate) => !candidate.isArchived)}
+              notes={notes}
               selectedNoteId={note.parentNoteId}
               movingNoteId={note.id}
               onSelect={(parentNoteId) => void handleMove(parentNoteId)}
@@ -322,6 +322,16 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
                     router.push('/settings');
                     return;
                   }
+                  // See the folder sheet: a passcode has to exist before anything
+                  // new is locked, so the device prompt is never the only key.
+                  if (!passcodeSet) {
+                    toast('Set a passcode first, so this note can never become unreachable', {
+                      tone: 'danger',
+                    });
+                    close();
+                    router.push('/settings');
+                    return;
+                  }
                   if (isProtected && !note.isLocked) {
                     toast('A subnote of a locked note inherits its lock. Unlock the parent note instead.');
                     return;
@@ -333,15 +343,6 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
                       { tone: 'success' },
                     );
                   });
-                  close();
-                }}
-              />
-              <ActionRow
-                icon={<Archive size={18} strokeWidth={1.9} aria-hidden />}
-                label={note.isArchived ? 'Restore from archive' : 'Archive note and subnotes'}
-                onClick={() => {
-                  void useVaultStore.getState().archiveNote(note.id, !note.isArchived);
-                  toast(note.isArchived ? 'Restored' : 'Archived');
                   close();
                 }}
               />

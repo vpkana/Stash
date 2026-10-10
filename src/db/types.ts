@@ -264,7 +264,13 @@ export interface PrivacySettings {
    * round-trips.
    */
   lockApp: boolean;
-  /** Block screenshots and the recents thumbnail while unlocked. */
+  /**
+   * Ask Android to block screenshots and the app-switcher thumbnail while the
+   * vault is unlocked. Android-only, and ignored everywhere else — see
+   * `lib/privacy/screen.ts`, which reports whether it can be honoured here. It is
+   * enforced independently of this flag while the vault is locked, and it never
+   * gates access to anything: switching it on locks nothing.
+   */
   secureScreen: boolean;
   /** Whether the device prompt is part of the way in. */
   biometric: boolean;

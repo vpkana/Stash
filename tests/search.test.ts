@@ -134,8 +134,11 @@ describe('searchVault', () => {
     expect(relaxed.links.map((h) => h.link.id)).toEqual(['l1']);
   });
 
-  it('never returns archived links', () => {
-    expect(ids('archived thing')).toEqual([]);
+  it('returns a link carrying the legacy archive flag like any other', () => {
+    // Archiving used to be a state the app could enter; it cannot any more, and
+    // the migration clears it. A row that still carries the flag — an imported
+    // backup from an older build, say — must be findable rather than lost.
+    expect(ids('archived thing')).toEqual(['l4']);
   });
 
   it('reports which fields matched', () => {
@@ -157,7 +160,9 @@ describe('searchVault', () => {
   });
 
   it('returns recents newest-first for an empty query', () => {
-    expect(ids('')).toEqual(['l1', 'l2', 'l3']);
+    // `l4` carries the legacy archive flag and is an ordinary result, which is
+    // the property that replaced "archived links are never returned".
+    expect(ids('')).toEqual(['l1', 'l2', 'l3', 'l4']);
   });
 
   it('applies the favorites filter', () => {

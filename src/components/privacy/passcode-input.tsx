@@ -22,6 +22,14 @@ import { cn } from '@/lib/utils';
 
 export interface PasscodeInputProps {
   label: string;
+  /**
+   * Field id, so the label points at this input.
+   *
+   * Defaulted rather than fixed because a screen can legitimately need two of
+   * these — a passcode and its confirmation — and two elements sharing one id is
+   * a label that points at whichever came first.
+   */
+  id?: string;
   value: string;
   onChange: (value: string) => void;
   onSubmit?: () => void;
@@ -36,6 +44,7 @@ export interface PasscodeInputProps {
 
 export function PasscodeInput({
   label,
+  id = 'stash-passcode',
   value,
   onChange,
   onSubmit,
@@ -50,12 +59,12 @@ export function PasscodeInput({
 
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
-      <label htmlFor="stash-passcode" className="text-meta font-medium text-muted">
+      <label htmlFor={id} className="text-meta font-medium text-muted">
         {label}
       </label>
       <div className="relative">
         <Input
-          id="stash-passcode"
+          id={id}
           type={reveal ? 'text' : 'password'}
           value={value}
           autoFocus={autoFocus}

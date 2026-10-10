@@ -150,7 +150,62 @@ export async function moveFolder(id: string, targetParentId: string | null): Pro
   return result;
 }
 
-/** Shift a folder one slot up or down among its siblings. */
+/**
+ * Write an explicit sibling order.
+ *
+ * This is what a drag produces: the whole list, in the order the user left it.
+ * Storing positions rather than swaps is what makes the result the same after a
+ * restart as it was on screen — every row in the run gets its index written, so
+ * there is no half-applied state where two rows claim a position and the tie is
+ * broken by a name comparison nobody asked for.
+ *
+ * Only rows that actually move are written, and `updatedAt` is deliberately left
+ * alone: reordering is not editing. A folder list sorted by "recently changed"
+ * would otherwise reshuffle itself the moment it was dragged, and "nothing about
+ * my structure changed, I just moved it" is the honest record.
+ *
+ * Ids that do not exist, belong to another parent, or repeat are ignored, so a
+ * stale list from a screen that was open across a sync cannot re-home anything.
+ */
+export async function setFolderOrder(parentId: string | null, orderedIds: readonly string[]): Promise<boolean> {
+  return db.transaction('rw', db.folders, async () => {
+    const siblings = await db.folders
+      .filter((folder) => (folder.parentId ?? null) === (parentId ?? null))
+      .toArray();
+    const byId = new Map(siblings.map((folder) => [folder.id, folder]));
+
+    const seen = new Set<string>();
+    const placed: Array<{ id: string; sortOrder: number }> = [];
+    for (const id of orderedIds) {
+      const folder = byId.get(id);
+      if (!folder || seen.has(id)) continue;
+      seen.add(id);
+      const index = placed.length;
+      if (folder.sortOrder !== index) placed.push({ id, sortOrder: index });
+    }
+
+    // Anything the caller did not mention keeps a place after the ones it did,
+    // rather than being dragged to the top by omission.
+    const trailing = siblings.filter((folder) => !seen.has(folder.id));
+    let next = placed.length;
+    for (const folder of trailing) {
+      if (folder.sortOrder !== next) placed.push({ id: folder.id, sortOrder: next });
+      next += 1;
+    }
+
+    if (placed.length === 0) return false;
+    await Promise.all(placed.map((entry) => db.folders.update(entry.id, { sortOrder: entry.sortOrder })));
+    return true;
+  });
+}
+
+/**
+ * Shift a folder one slot up or down among its siblings.
+ *
+ * Kept for the notes-style step controls and for the keyboard path on the drag
+ * handle; the visible "Move up / Move down" menu rows that used to call it are
+ * gone, because a drag is what that gesture is.
+ */
 export async function reorderFolder(id: string, direction: 'up' | 'down'): Promise<boolean> {
   return db.transaction('rw', db.folders, async () => {
     const folders = await db.folders.toArray();

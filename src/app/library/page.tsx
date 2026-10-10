@@ -22,6 +22,7 @@ import { IdentityTile } from '@/components/ui/identity-tile';
 import { identityColor } from '@/lib/identity-color';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
+import { useDragSort } from '@/hooks/use-drag-sort';
 
 import { LinkRow } from '@/components/links/link-row';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
@@ -77,9 +78,36 @@ function LibraryView() {
   const [createError, setCreateError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
-  const currentFolder = currentId ? folders.find((folder) => folder.id === currentId) ?? null : null;
   const trail = React.useMemo(() => (currentId ? breadcrumbOf(folders, currentId) : []), [folders, currentId]);
   const subfolders = React.useMemo(() => childrenOf(folders, currentId), [folders, currentId]);
+
+  const currentFolder = currentId ? folders.find((folder) => folder.id === currentId) ?? null : null;
+
+  /*
+   * Dragging a folder to reorder it, scoped to the siblings on this screen.
+   *
+   * The list handed to the hook is exactly the run of children being rendered,
+   * and that is what keeps a drag inside its own parent: there is no other list
+   * for an index to resolve against, so a folder cannot be dropped into a parent
+   * it was never next to. Moving *between* parents stays where it belongs — in
+   * the folder's own sheet, as an explicit "Move to another folder".
+   *
+   * Like every other hook here it runs on every render, above the early return
+   * for a locked folder, so the number of hooks never depends on the data.
+   */
+  const folderDrag = useDragSort({
+    ids: subfolders.map((folder) => folder.id),
+    noun: 'folder',
+    labelOf: (id) => folders.find((folder) => folder.id === id)?.name ?? 'folder',
+    onReorder: (next) => {
+      void useVaultStore
+        .getState()
+        .setFolderOrder(currentId, next)
+        .then((ok) => {
+          if (!ok) toast('Could not save that order', { tone: 'danger' });
+        });
+    },
+  });
 
   const folderLinks = React.useMemo(() => {
     const ids = new Set<string>();
@@ -90,7 +118,6 @@ function LibraryView() {
     return links
       .filter(
         (link) =>
-          !link.isArchived &&
           !hidden.links.has(link.id) &&
           (currentId ? link.folderId !== null && ids.has(link.folderId) : true),
       )
@@ -129,9 +156,9 @@ function LibraryView() {
     );
   };
 
-  const totalLinks = links.filter((link) => !link.isArchived && !hidden.links.has(link.id)).length;
+  const totalLinks = links.filter((link) => !hidden.links.has(link.id)).length;
   const favoriteLinks = links
-    .filter((link) => link.isFavorite && !link.isArchived && !hidden.links.has(link.id))
+    .filter((link) => link.isFavorite && !hidden.links.has(link.id))
     .slice(0, 4);
   const visibleFolders = folders.filter((folder) => !hidden.folders.has(folder.id));
 
@@ -301,7 +328,15 @@ function LibraryView() {
                     void submitNewFolder();
                   }
                 }}
-                placeholder={currentFolder ? `New folder inside ${currentFolder.name}` : 'New folder name'}
+                /*
+                 * Just a name. Where the folder will land is not asked for here
+                 * and is not part of the field's label either — the line under
+                 * the input says so, and the screen the user is looking at
+                 * already says it a third time. Spelling the destination into
+                 * the placeholder as well is what made the old "New folder
+                 * inside X" read as a second, different action.
+                 */
+                placeholder="Folder name"
                 aria-label="New folder name"
                 enterKeyHint="done"
                 maxLength={80}
@@ -346,6 +381,7 @@ function LibraryView() {
                 subtitle={folderPathLabel(folders, folder.id)}
                 onOpen={() => router.push(`/library?folder=${folder.id}`)}
                 onShowActions={() => setActiveFolder(folder)}
+                onToggleFavorite={() => void useVaultStore.getState().toggleFolderFavorite(folder.id)}
               />
             ))}
             {favoriteLinks.map((link) => (
@@ -394,20 +430,34 @@ function LibraryView() {
       {subfolders.length > 0 ? (
         <Section title={currentId === null ? 'Folders' : 'Subfolders'}>
           <ListSurface>
-            {subfolders.map((folder) => {
+            {subfolders.map((folder, index) => {
               const stats = folderStats.get(folder.id);
+              const drag = folderDrag.getRowProps(folder.id, index);
               return (
-                <FolderRow
-                  key={folder.id}
-                  folder={folder}
-                  linkCount={(stats?.directLinks ?? 0) + (stats?.nestedLinks ?? 0)}
-                  childCount={stats?.directChildren ?? 0}
-                  onOpen={() => router.push(`/library?folder=${folder.id}`)}
-                  onShowActions={() => setActiveFolder(folder)}
-                />
+                <div key={folder.id} ref={drag.ref} className={drag.className} data-drop-edge={drag['data-drop-edge']}>
+                  <FolderRow
+                    folder={folder}
+                    linkCount={(stats?.directLinks ?? 0) + (stats?.nestedLinks ?? 0)}
+                    childCount={stats?.directChildren ?? 0}
+                    onOpen={() => router.push(`/library?folder=${folder.id}`)}
+                    onShowActions={() => setActiveFolder(folder)}
+                    onToggleFavorite={() => void useVaultStore.getState().toggleFolderFavorite(folder.id)}
+                    dragHandle={folderDrag.getHandleProps(folder.id, index)}
+                  />
+                </div>
               );
             })}
           </ListSurface>
+          {/*
+           * The one place in the app that names the gesture, and only while the
+           * list is long enough for the order to be worth choosing. It is a
+           * sentence rather than a permanent toolbar: the grips on the rows are
+           * the real signpost, and instructions that outlive their moment are
+           * just clutter.
+           */}
+          {subfolders.length > 1 ? (
+            <p className="text-meta px-5 pt-2 text-subtle">Drag the grip to reorder.</p>
+          ) : null}
         </Section>
       ) : null}
 

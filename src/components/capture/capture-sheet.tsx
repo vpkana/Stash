@@ -1,7 +1,17 @@
 'use client';
 
 import * as React from 'react';
-import { Check, Copy, FolderPlus, Inbox, Loader2, Plus, Share2, X } from '@/components/ui/icons';
+import {
+  Check,
+  Copy,
+  Folder as FolderIcon,
+  FolderPlus,
+  Inbox,
+  Loader2,
+  Plus,
+  Share2,
+  X,
+} from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
 import { destinationLabel } from '@/lib/destination';
 import { isHttpUrl } from '@/lib/url/normalize';
@@ -44,6 +54,9 @@ export function CaptureSheet() {
   const duplicateAcknowledged = useCaptureStore((state) => state.duplicateAcknowledged);
   const saveOtherUrls = useCaptureStore((state) => state.saveOtherUrls);
   const showCreateFolder = useCaptureStore((state) => state.showCreateFolder);
+  const destinationFromContext = useCaptureStore((state) => state.destinationFromContext);
+  const showDestinationPicker = useCaptureStore((state) => state.showDestinationPicker);
+  const setShowDestinationPicker = useCaptureStore((state) => state.setShowDestinationPicker);
   const folders = useVaultStore((state) => state.folders);
 
   const [error, setError] = React.useState<string | null>(null);
@@ -266,6 +279,40 @@ export function CaptureSheet() {
                     }}
                   />
                 </section>
+              ) : destinationFromContext && !showDestinationPicker ? (
+                /*
+                 * The destination is already known, so it is stated rather than
+                 * asked about.
+                 *
+                 * The whole tree used to be drawn here whatever the answer was,
+                 * which made filing a link into the folder you were already
+                 * standing in cost a question and a scroll. One line, one tap
+                 * away from changing it — the picker is not gone, it is just not
+                 * the default when it has nothing to ask.
+                 */
+                <section className="flex flex-col gap-1.5">
+                  <SectionLabel>Save to</SectionLabel>
+                  <div className="mx-3 flex items-center gap-3 rounded-xl border border-border bg-surface-2 px-3.5 py-3">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-accent">
+                      <FolderIcon size={17} strokeWidth={2} aria-hidden />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-row font-medium text-fg">
+                        {destinationLabel(destination, folders)}
+                      </span>
+                      <span className="text-meta block truncate text-subtle">
+                        {inInbox ? 'No folder yet — organize it later' : 'Where you are now'}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowDestinationPicker(true)}
+                      className="tap shrink-0 rounded-lg px-2 py-1 text-meta font-semibold text-accent active:bg-accent-soft"
+                    >
+                      Change
+                    </button>
+                  </div>
+                </section>
               ) : (
                 <section className="flex flex-col gap-1.5">
                   <SectionLabel>Save to</SectionLabel>
@@ -275,18 +322,32 @@ export function CaptureSheet() {
                     onSelect={(selection) => void useCaptureStore.getState().chooseDestination(selection)}
                     showInbox
                     showFavorites
-                    footer={
-                      <button
-                        type="button"
-                        onClick={() => setShowCreateFolder(true)}
-                        className="tap mt-0.5 flex w-full items-center gap-3 rounded-xl bg-surface-2 px-3.5 py-3 text-left active:bg-surface-3"
-                      >
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-accent">
-                          <Plus size={17} strokeWidth={2.1} aria-hidden />
-                        </span>
-                        <span className="text-row font-medium text-accent">Create folder</span>
-                      </button>
-                    }
+                    {...(destinationFromContext
+                      ? {
+                          footer: (
+                            <button
+                              type="button"
+                              onClick={() => setShowDestinationPicker(false)}
+                              className="tap mt-0.5 flex w-full items-center justify-center gap-2 rounded-xl px-3.5 py-2.5 text-row font-medium text-muted active:bg-surface-2"
+                            >
+                              Keep {destinationLabel(destination, folders)}
+                            </button>
+                          ),
+                        }
+                      : {
+                          footer: (
+                            <button
+                              type="button"
+                              onClick={() => setShowCreateFolder(true)}
+                              className="tap mt-0.5 flex w-full items-center gap-3 rounded-xl bg-surface-2 px-3.5 py-3 text-left active:bg-surface-3"
+                            >
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-accent">
+                                <Plus size={17} strokeWidth={2.1} aria-hidden />
+                              </span>
+                              <span className="text-row font-medium text-accent">Create folder</span>
+                            </button>
+                          ),
+                        })}
                   />
                 </section>
               )}

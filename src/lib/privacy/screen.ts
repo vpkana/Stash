@@ -14,7 +14,14 @@
  * applied to the whole app as a silent default.
  *
  * The flag is a native window property, so this goes through a small local
- * Capacitor plugin; on the web it is a no-op rather than a pretence.
+ * Capacitor plugin; on the web it is a no-op rather than a pretence, and
+ * {@link screenPrivacySupported} is how a screen can say so instead of offering a
+ * switch that does nothing.
+ *
+ * Nothing here locks anything. Screen privacy is a window flag; it does not
+ * require a key, does not withhold content and cannot be the reason an unlock is
+ * asked for. Turning it on is not a way to turn the vault's protection on, and
+ * turning it off does not turn anything off.
  */
 interface PrivacyScreenPlugin {
   setSecure(options: { secure: boolean }): Promise<void>;
@@ -37,6 +44,18 @@ async function resolvePlugin(): Promise<PrivacyScreenPlugin | null> {
     console.warn('[stash] screen privacy unavailable', error);
   }
   return plugin;
+}
+
+/**
+ * Whether this build can actually do it.
+ *
+ * True on Android, where `FLAG_SECURE` is a real window property, and false
+ * everywhere else — including a desktop browser, where "blocking a screenshot"
+ * is not a thing a page can do and claiming otherwise would be a lie the user
+ * only discovers when a screenshot of their vault lands in the wrong place.
+ */
+export async function screenPrivacySupported(): Promise<boolean> {
+  return (await resolvePlugin()) !== null;
 }
 
 let applied: boolean | null = null;

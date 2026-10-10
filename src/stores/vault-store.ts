@@ -23,7 +23,7 @@ import {
   getDeletionImpact,
   moveFolder as moveFolderRepo,
   renameFolder as renameFolderRepo,
-  reorderFolder as reorderFolderRepo,
+  setFolderOrder as setFolderOrderRepo,
   setFolderFavorite,
   setFolderIcon,
   setFolderLocked,
@@ -38,7 +38,6 @@ import {
   listLinksInFolder,
   moveLink as moveLinkRepo,
   setLinkFavorite,
-  setLinkArchived,
   setLinkLocked,
   setLinkUnavailable as setLinkUnavailableRepo,
   touchLinkOpened,
@@ -67,7 +66,6 @@ import {
   getNoteDeletionImpact,
   renameNote as renameNoteRepo,
   reorderNote as reorderNoteRepo,
-  setNoteArchived,
   setNoteFavorite,
   setNoteLocked,
   updateNote as updateNoteRepo,
@@ -117,11 +115,16 @@ export interface VaultState {
   linkTags: LinkTag[];
   folderStats: Map<string, FolderStats>;
   recentFolderIds: string[];
-  /** Every visible note, including archived ones. */
+  /** Every visible note. */
   notes: Note[];
   /**
-   * Notes a browsing UI should show: archived notes and their subtrees removed.
-   * Precomputed once per refresh so no component has to walk the tree.
+   * Notes a browsing UI should show.
+   *
+   * Precomputed once per refresh so no component walks the tree to answer it, and
+   * it is currently the same set as `notes`: the archive used to remove items
+   * here, and nothing removes items any more. It stays a separate field because
+   * "the notes to browse" is a question with a home, not because the two differ
+   * today.
    */
   visibleNotes: Note[];
   /** Note-to-link references, the join between the two halves of the vault. */
@@ -157,7 +160,7 @@ export interface VaultState {
    */
   hasProtection: boolean;
   /**
-   * Live, unarchived links that have no folder: the Inbox.
+   * Live links that have no folder: the Inbox.
    *
    * Derived once per refresh rather than filtered in each screen, because Home,
    * Settings and the Inbox itself all ask the same question and none of them
@@ -197,7 +200,14 @@ export interface VaultState {
   createFolder: (input: { name: string; parentId?: string | null; icon?: string }) => Promise<CreateFolderResult>;
   renameFolder: (id: string, name: string) => Promise<boolean>;
   moveFolder: (id: string, targetParentId: string | null) => Promise<MoveResult>;
-  reorderFolder: (id: string, direction: 'up' | 'down') => Promise<boolean>;
+  /**
+   * Persist a new sibling order, as produced by dragging a folder.
+   *
+   * Takes the whole list rather than a from/to pair, because the order the user
+   * left on screen *is* the order: a move expressed as two positions has to be
+   * re-derived from a list that may have changed underneath it.
+   */
+  setFolderOrder: (parentId: string | null, orderedIds: readonly string[]) => Promise<boolean>;
   deleteFolder: (id: string, strategy: DeleteStrategy) => Promise<boolean>;
   toggleFolderFavorite: (id: string, value?: boolean) => Promise<void>;
   setFolderEmojiIcon: (id: string, icon: string | undefined) => Promise<void>;
@@ -208,7 +218,6 @@ export interface VaultState {
   updateLink: (id: string, patch: UpdateLinkInput) => Promise<void>;
   moveLink: (id: string, folderId: string | null) => Promise<void>;
   toggleLinkFavorite: (id: string, value?: boolean) => Promise<void>;
-  archiveLink: (id: string, value: boolean) => Promise<void>;
   toggleLinkLocked: (id: string, value?: boolean) => Promise<void>;
   /** Moves a link to the trash: recoverable, and what every "Delete" button does. */
   deleteLink: (id: string) => Promise<void>;
@@ -230,7 +239,6 @@ export interface VaultState {
   reorderNote: (id: string, direction: 'up' | 'down') => Promise<boolean>;
   deleteNote: (id: string, strategy: NoteDeleteStrategy) => Promise<boolean>;
   toggleNoteFavorite: (id: string, value?: boolean) => Promise<void>;
-  archiveNote: (id: string, value: boolean) => Promise<void>;
   toggleNoteLocked: (id: string, value?: boolean) => Promise<void>;
   noteDeletionImpact: (id: string) => Promise<NoteDeletionImpact | null>;
   attachLink: (noteId: string, linkId: string, origin?: NoteLinkOrigin) => Promise<boolean>;
@@ -255,7 +263,7 @@ export interface VaultState {
  */
 function inboxOf(links: readonly SavedLink[]): SavedLink[] {
   return links
-    .filter((link) => !link.isArchived && link.folderId === null)
+    .filter((link) => link.folderId === null)
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -458,8 +466,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     return result;
   },
 
-  reorderFolder: async (id, direction) => {
-    const ok = await reorderFolderRepo(id, direction);
+  setFolderOrder: async (parentId, orderedIds) => {
+    const ok = await setFolderOrderRepo(parentId, orderedIds);
     if (ok) await get().refresh();
     return ok;
   },
@@ -536,11 +544,6 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       ),
     });
     await setLinkFavorite(id, next);
-    await get().refresh();
-  },
-
-  archiveLink: async (id, value) => {
-    await setLinkArchived(id, value);
     await get().refresh();
   },
 
@@ -666,11 +669,6 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     await get().refresh();
   },
 
-  archiveNote: async (id, value) => {
-    await setNoteArchived(id, value);
-    await get().refresh();
-  },
-
   toggleNoteLocked: async (id, value) => {
     const current = get().notes.find((note) => note.id === id);
     const next = value ?? !(current?.isLocked ?? false);
@@ -780,8 +778,7 @@ export function selectLinksForNote(state: VaultState, noteId: string): SavedLink
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((row) => byId.get(row.linkId))
     .filter(
-      (link): link is SavedLink =>
-        Boolean(link) && !link!.isArchived && !state.hidden.links.has(link!.id),
+      (link): link is SavedLink => Boolean(link) && !state.hidden.links.has(link!.id),
     );
 }
 
@@ -842,7 +839,7 @@ export function selectInboxLinks(state: VaultState): SavedLink[] {
 /** Links the user marked as no longer working, for a "needs attention" count. */
 export function selectUnavailableLinks(state: VaultState): SavedLink[] {
   return state.links.filter(
-    (link) => link.isUnavailable && !link.isArchived && !state.hidden.links.has(link.id),
+    (link) => link.isUnavailable && !state.hidden.links.has(link.id),
   );
 }
 

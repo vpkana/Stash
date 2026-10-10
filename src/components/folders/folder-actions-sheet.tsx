@@ -2,12 +2,9 @@
 
 import * as React from 'react';
 import {
-  Archive,
   ArrowLeft,
-  ArrowUpDown,
   Check,
   FolderInput,
-  FolderPlus,
   Lock,
   Pencil,
   Share2,
@@ -31,7 +28,6 @@ import { toast } from '@/components/ui/toast';
 import { Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import { FolderDestinationList } from '@/components/capture/folder-destination-list';
-import { CreateFolderInline } from '@/components/capture/create-folder-inline';
 import { INBOX_DESTINATION, folderDestination } from '@/lib/destination';
 
 /**
@@ -44,7 +40,16 @@ import { INBOX_DESTINATION, folderDestination } from '@/lib/destination';
  * makes a mis-tap on a folder with ninety links in it recoverable.
  */
 
-type Mode = 'actions' | 'rename' | 'move' | 'delete' | 'subfolder';
+/**
+ * The sheet's states.
+ *
+ * There is no `subfolder` state, and its absence is deliberate. "New folder
+ * inside X" used to live here, next to a folder page whose own New folder button
+ * already created inside X — two controls for one act, phrased as if they did
+ * different things. The page's button is the one that remains, and the place you
+ * are standing is what decides where the folder goes.
+ */
+type Mode = 'actions' | 'rename' | 'move' | 'delete';
 
 export interface FolderActionsSheetProps {
   folder: Folder | null;
@@ -58,6 +63,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
   const folders = useVaultStore((state) => state.folders);
   const links = useVaultStore((state) => state.links);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
+  const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
   const protectedId = folder?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.folders.has(protectedId));
   // Reset by remount: callers pass a `key` derived from the folder id.
@@ -87,9 +93,9 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
         }
       }
     }
-    const direct = links.filter((link) => !link.isArchived && link.folderId === folder.id).length;
+    const direct = links.filter((link) => link.folderId === folder.id).length;
     const nested = links.filter(
-      (link) => !link.isArchived && link.folderId !== null && descendants.has(link.folderId),
+      (link) => link.folderId !== null && descendants.has(link.folderId),
     ).length;
     return { descendants: descendants.size, direct, nested, total: direct + nested };
   }, [folder, folders, links]);
@@ -98,28 +104,6 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
 
   const parentLabel = folder.parentId ? folderPathLabel(folders, folder.parentId) : 'Top level';
   const moveCheck: MoveCheck = canMoveFolder(folders, folder.id, folder.parentId);
-
-  /**
-   * Archiving is the gentle alternative to deleting: nothing leaves the vault,
-   * the links simply stop showing up in the folder. Scoped to this folder's own
-   * subtree so a parent folder is never touched by a child's action.
-   */
-  const archiveFolderAndContents = async () => {
-    setBusy(true);
-    const subtreeIds = new Set<string>([folder.id]);
-    for (const candidate of folders) {
-      if (candidate.parentId === folder.id) subtreeIds.add(candidate.id);
-    }
-    const targets = links.filter(
-      (link) => !link.isArchived && link.folderId !== null && subtreeIds.has(link.folderId),
-    );
-    for (const link of targets) {
-      await useVaultStore.getState().archiveLink(link.id, true);
-    }
-    setBusy(false);
-    toast(targets.length > 0 ? `Archived ${pluralize(targets.length, 'link')}` : 'Nothing to archive');
-    close();
-  };
 
   const handleRename = async () => {
     const trimmed = name.trim();
@@ -165,7 +149,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
   const shareContents = async () => {
     const subtree = new Set<string>([folder.id, ...descendantIdsOf(folders, folder.id)]);
     const inside = links.filter(
-      (link) => !link.isArchived && link.folderId !== null && subtree.has(link.folderId),
+      (link) => link.folderId !== null && subtree.has(link.folderId),
     );
     if (inside.length === 0) {
       toast('Nothing in this folder to share yet');
@@ -231,9 +215,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                     ? 'Move folder'
                     : mode === 'delete'
                       ? 'Delete folder?'
-                      : mode === 'subfolder'
-                        ? 'New subfolder'
-                        : folder.name}
+                      : folder.name}
               </SheetTitle>
               <p className="mt-0.5 truncate text-meta text-subtle">
                 {mode === 'actions' ? `${parentLabel} · ${pluralize(impact?.total ?? 0, 'link')}` : folderPathLabel(folders, folder.id)}
@@ -243,17 +225,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
         </SheetHeader>
 
         <SheetBody>
-          {mode === 'subfolder' ? (
-            <CreateFolderInline
-              folders={folders}
-              defaultParentId={folder.id}
-              onCancel={() => setMode('actions')}
-              onCreated={(created) => {
-                toast(`Created “${created.name}”`, { tone: 'success' });
-                close();
-              }}
-            />
-          ) : mode === 'rename' ? (
+          {mode === 'rename' ? (
             <div className="flex flex-col gap-3 px-3 pb-2">
               <div className="flex items-center gap-2">
                 <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-muted">
@@ -348,11 +320,6 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                 onClick={() => setMode('rename')}
               />
               <ActionRow
-                icon={<FolderPlus size={18} strokeWidth={1.9} aria-hidden />}
-                label={`New folder inside “${folder.name}”`}
-                onClick={() => setMode('subfolder')}
-              />
-              <ActionRow
                 icon={<FolderInput size={18} strokeWidth={1.9} aria-hidden />}
                 label="Move to another folder"
                 onClick={() => setMode('move')}
@@ -377,6 +344,18 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                 onClick={() => {
                   if (!keyringPresent) {
                     toast('Turn on locking first', { tone: 'danger' });
+                    close();
+                    router.push('/settings');
+                    return;
+                  }
+                  // Locking something new requires a passcode to exist first. A
+                  // folder whose only way in is a device key is one settings
+                  // change away from being unopenable, and it is far kinder to
+                  // ask now than to explain that afterwards.
+                  if (!passcodeSet) {
+                    toast('Set a passcode first, so this folder can never become unreachable', {
+                      tone: 'danger',
+                    });
                     close();
                     router.push('/settings');
                     return;
@@ -413,34 +392,9 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                 }}
               />
               <ActionRow
-                icon={<ArrowUpDown size={18} strokeWidth={1.9} aria-hidden />}
-                label="Move up in this list"
-                onClick={() => {
-                  void useVaultStore
-                    .getState()
-                    .reorderFolder(folder.id, 'up')
-                    .then((ok) => toast(ok ? 'Moved up' : 'Already at the top'));
-                }}
-              />
-              <ActionRow
-                icon={<ArrowUpDown size={18} strokeWidth={1.9} className="rotate-180" aria-hidden />}
-                label="Move down in this list"
-                onClick={() => {
-                  void useVaultStore
-                    .getState()
-                    .reorderFolder(folder.id, 'down')
-                    .then((ok) => toast(ok ? 'Moved down' : 'Already at the bottom'));
-                }}
-              />
-              <ActionRow
                 icon={<Share2 size={18} strokeWidth={1.9} aria-hidden />}
                 label="Share the links inside"
                 onClick={() => void shareContents()}
-              />
-              <ActionRow
-                icon={<Archive size={18} strokeWidth={1.9} aria-hidden />}
-                label="Archive the links inside"
-                onClick={() => void archiveFolderAndContents()}
               />
               <ActionRow
                 icon={<Trash2 size={18} strokeWidth={1.9} aria-hidden />}
@@ -451,8 +405,12 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
               {!moveCheck.ok ? <p className="text-label px-4 pb-3 text-subtle">{moveCheck.reason}</p> : null}
               {!keyringPresent ? (
                 <p className="text-label px-4 pb-3 leading-relaxed text-subtle">
-                  Locking encrypts a folder and everything inside it. Turn it on in Settings with your device
-                  lock.
+                  Locking encrypts a folder and everything inside it. Turn it on in Settings with a passcode.
+                </p>
+              ) : !passcodeSet ? (
+                <p className="text-label px-4 pb-3 leading-relaxed text-subtle">
+                  Set a passcode in Settings first. The device prompt is quicker, but it can be switched off
+                  outside Stash — a passcode cannot.
                 </p>
               ) : null}
             </ActionList>

@@ -438,11 +438,12 @@ describe('migration from a links-only vault', () => {
     });
     await legacy.close();
 
-    // Re-open through the current schema: the v2 -> v5 upgrades
-    // must run additively, adding tables without rewriting existing rows.
+    // Re-open through the current schema: every upgrade from v2 onward must run
+    // additively, adding tables and clearing the retired archive flag without
+    // rewriting or losing existing rows.
     const upgraded = new StashDatabase('legacy-v2-vault');
     await upgraded.open();
-    expect(upgraded.verno).toBe(5);
+    expect(upgraded.verno).toBe(6);
 
     const rows = await upgraded.links.toArray();
     expect(rows).toHaveLength(1);

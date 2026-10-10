@@ -10,20 +10,20 @@ import { getRecentFolderIds, pruneRecentFolders, pushRecentFolder } from '@/db/r
 import { trashLink } from '@/db/repos/trash';
 import { parseBackup } from '@/lib/backup/validate';
 import { computeFolderStats } from '@/lib/folder-stats';
-import { searchVault, type VaultSnapshot } from '@/lib/search';
+import { SEARCH_FILTERS, searchFilterFrom, searchVault, type VaultSnapshot } from '@/lib/search';
 import { breadcrumbOf, depthOf, descendantIdsOf, folderPathLabel } from '@/lib/tree';
 import { inboxOf } from '@/stores/vault-store';
 
 /**
  * The features that make the vault usable day to day, beyond capture itself:
- * the Inbox, recent destinations as a deterministic shortcut, archiving as a
- * searchable state, link health as a note the user keeps, and the scale at which
- * the whole thing still has to feel instant.
+ * the Inbox, recent destinations as a deterministic shortcut, link health as a
+ * note the user keeps, and the scale at which the whole thing still has to feel
+ * instant.
  *
- * The archived-filter cases are pure, over a hand-built snapshot, because the
- * rule being tested is "which rows may this filter see" and a database would
- * only add ceremony. The Inbox, recents and health cases go through a real
- * database, because their rule is about what is *stored*, not what is scored.
+ * The filter cases are pure, over a hand-built snapshot, because the rule being
+ * tested is "which rows may this filter see" and a database would only add
+ * ceremony. The Inbox, recents and health cases go through a real database,
+ * because their rule is about what is *stored*, not what is scored.
  */
 
 async function resetDatabase() {
@@ -37,7 +37,13 @@ beforeEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Archived: a searchable state, not a graveyard
+// Archived: a field the app no longer has
+//
+// These cases used to describe a filter that revealed what every other surface
+// hid. That filter is gone and a migration restored the rows, so what is worth
+// pinning down now is the opposite property: a row carrying the legacy flag is
+// an ordinary row, visible under every filter that applies to it. If the flag
+// ever started hiding things again, this is where it would show up.
 // ---------------------------------------------------------------------------
 
 function folder(id: string, name: string, parentId: string | null = null): Folder {
@@ -82,59 +88,67 @@ function note(id: string, title: string, partial: Partial<Note> = {}): Note {
   };
 }
 
-const ARCHIVE_SNAPSHOT: VaultSnapshot = {
+const LEGACY_FLAG_SNAPSHOT: VaultSnapshot = {
   folders: [folder('dev', 'Development')],
   links: [
     link({ id: 'live', url: 'https://example.com/live', title: 'Live link' }),
-    link({ id: 'dead', url: 'https://example.com/dead', title: 'Dead link', isArchived: true }),
-    // Archived *and* locked. The lock is the stronger rule, so this must not
-    // surface under any filter — including the one that exists to reveal the
-    // archive.
+    link({ id: 'flagged', url: 'https://example.com/flagged', title: 'Flagged link', isArchived: true }),
+    // The legacy flag *and* a lock. The lock is the stronger rule and still wins:
+    // this row must not appear under any filter.
     link({ id: 'secret', url: 'https://example.com/secret', title: 'Secret link', isArchived: true }),
   ],
   notes: [
     note('live-note', 'Live note'),
-    note('old-note', 'Old note', { isArchived: true }),
+    note('flagged-note', 'Flagged note', { isArchived: true }),
   ],
   tags: [] as Tag[],
   linkTags: [] as LinkTag[],
   noteLinks: [] as NoteLink[],
 };
 
-const ARCHIVE_HIDDEN = {
+const LEGACY_FLAG_HIDDEN = {
   folders: new Set<string>(),
   notes: new Set<string>(),
   links: new Set<string>(['secret']),
 };
 
-describe('the archive filter', () => {
-  it('is the only filter that shows archived items, and shows nothing else', () => {
-    const archived = searchVault(ARCHIVE_SNAPSHOT, {
-      query: '',
-      filter: 'archived',
-      hidden: ARCHIVE_HIDDEN,
-    });
-    expect(archived.links.map((hit) => hit.link.id).sort()).toEqual(['dead']);
-    expect(archived.notes.map((hit) => hit.note.id)).toEqual(['old-note']);
-    // Folders have no archive state, so the group is empty rather than
-    // misleadingly full.
-    expect(archived.folders).toEqual([]);
-  });
-
-  it('keeps archived items out of every other filter', () => {
+describe('a transferred archive flag', () => {
+  it('is an ordinary row under every filter', () => {
     for (const filter of ['all', 'links', 'notes', 'favorites', 'recent'] as const) {
-      const outcome = searchVault(ARCHIVE_SNAPSHOT, { query: '', filter, hidden: ARCHIVE_HIDDEN });
-      expect(outcome.links.map((hit) => hit.link.id)).not.toContain('dead');
-      expect(outcome.notes.map((hit) => hit.note.id)).not.toContain('old-note');
+      const outcome = searchVault(LEGACY_FLAG_SNAPSHOT, {
+        query: '',
+        filter,
+        hidden: LEGACY_FLAG_HIDDEN,
+      });
+      const links = outcome.links.map((hit) => hit.link.id);
+      if (filter === 'links' || filter === 'all' || filter === 'recent') {
+        expect(links).toContain('flagged');
+      } else {
+        expect(links).not.toContain('flagged');
+      }
     }
   });
 
-  it('never reveals an archived item that is also locked', () => {
-    for (const filter of ['all', 'links', 'archived'] as const) {
-      const outcome = searchVault(ARCHIVE_SNAPSHOT, {
+  it('is found by search, exactly like any other link', () => {
+    const outcome = searchVault(LEGACY_FLAG_SNAPSHOT, {
+      query: 'flagged',
+      filter: 'all',
+      hidden: LEGACY_FLAG_HIDDEN,
+    });
+    expect(outcome.links.map((hit) => hit.link.id)).toEqual(['flagged']);
+    expect(
+      searchVault(LEGACY_FLAG_SNAPSHOT, { query: 'flagged', hidden: LEGACY_FLAG_HIDDEN }).notes.map(
+        (hit) => hit.note.id,
+      ),
+    ).toEqual(['flagged-note']);
+  });
+
+  it('never reveals a row that is also locked', () => {
+    for (const filter of ['all', 'links', 'recent'] as const) {
+      const outcome = searchVault(LEGACY_FLAG_SNAPSHOT, {
         query: 'secret',
         filter,
-        hidden: ARCHIVE_HIDDEN,
+        hidden: LEGACY_FLAG_HIDDEN,
       });
       const ids = [
         ...outcome.links.map((hit) => hit.link.id),
@@ -146,18 +160,34 @@ describe('the archive filter', () => {
   });
 });
 
+describe('searchFilterFrom', () => {
+  it('accepts every filter this build has', () => {
+    for (const entry of SEARCH_FILTERS) expect(searchFilterFrom(entry.id)).toBe(entry.id);
+  });
+
+  it('falls back to All for a removed or unknown filter instead of failing', () => {
+    // `?filter=archived` is a real address — it was written into Settings, and it
+    // is in the history of anyone who used the feature. It has to land somewhere.
+    expect(searchFilterFrom('archived')).toBe('all');
+    expect(searchFilterFrom('nonsense')).toBe('all');
+    expect(searchFilterFrom(null)).toBe('all');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The Inbox: the absence of a folder
 // ---------------------------------------------------------------------------
 
 describe('the Inbox', () => {
-  it('is every live, unfiled link — and nothing else', () => {
+  it('is every unfiled link — and nothing else', () => {
     const rows = [
       link({ id: 'unfiled', url: 'https://example.com/a', folderId: null }),
       link({ id: 'filed', url: 'https://example.com/b', folderId: 'dev' }),
-      link({ id: 'archived', url: 'https://example.com/c', folderId: null, isArchived: true }),
+      // Carries the legacy flag. An unfiled link is an Inbox link; there is no
+      // longer a way for a saved link to be missing from the place it belongs.
+      link({ id: 'flagged', url: 'https://example.com/c', folderId: null, isArchived: true }),
     ];
-    expect(inboxOf(rows).map((row) => row.id)).toEqual(['unfiled']);
+    expect(inboxOf(rows).map((row) => row.id).sort()).toEqual(['flagged', 'unfiled']);
   });
 
   it('orders newest first so a hurried save is the one you see', () => {

@@ -449,6 +449,130 @@ describe('schema migration', () => {
     await Dexie.delete(name);
   });
 
+  /**
+   * The archive recovery, through real Dexie rather than a mock.
+   *
+   * A vault written by the previous build is opened by this one and the rows that
+   * were archived have to come back — with their ids, folders, notes, timestamps
+   * and hierarchy intact, because the whole reason the archive was recoverable is
+   * that it never deleted anything. Losing a row here would be exactly the bug
+   * this migration exists to end, so the test asserts on the rows themselves, not
+   * on the count alone.
+   */
+  it('restores archived links and notes from a version 5 vault without losing any row', async () => {
+    const name = 'stash-migration-archive-test';
+    await Dexie.delete(name);
+    const legacy = new Dexie(name);
+    legacy.version(5).stores({
+      folders: 'id, parentId, name, sortOrder, updatedAt, deletedAt, [parentId+sortOrder]',
+      links:
+        'id, folderId, normalizedUrl, createdAt, updatedAt, lastOpenedAt, deletedAt, [folderId+createdAt]',
+      tags: 'id, &name',
+      linkTags: '[linkId+tagId], linkId, tagId',
+      notes:
+        'id, parentNoteId, title, sortOrder, createdAt, updatedAt, deletedAt, [parentNoteId+sortOrder]',
+      noteLinks: '[noteId+linkId], noteId, linkId, createdAt',
+      meta: 'key',
+      security: 'key',
+    });
+    await legacy.open();
+
+    await legacy.table('folders').bulkAdd([
+      { id: 'f-dev', parentId: null, name: 'Developer', createdAt: 1, updatedAt: 1, sortOrder: 0, isFavorite: true, isLocked: true },
+    ]);
+    await legacy.table('links').bulkAdd([
+      {
+        id: 'l-live',
+        folderId: 'f-dev',
+        url: 'https://example.com/live',
+        normalizedUrl: 'https://example.com/live',
+        title: 'Live',
+        userNote: 'kept',
+        createdAt: 10,
+        updatedAt: 10,
+        isFavorite: false,
+        isArchived: false,
+        isLocked: false,
+      },
+      {
+        id: 'l-archived',
+        folderId: 'f-dev',
+        url: 'https://example.com/archived',
+        normalizedUrl: 'https://example.com/archived',
+        title: 'Archived',
+        userNote: 'the note I thought I had lost',
+        createdAt: 20,
+        updatedAt: 20,
+        isFavorite: true,
+        isArchived: true,
+        isLocked: false,
+      },
+    ]);
+    await legacy.table('notes').bulkAdd([
+      {
+        id: 'n-parent',
+        parentNoteId: null,
+        title: 'Parent',
+        content: 'body',
+        createdAt: 1,
+        updatedAt: 1,
+        sortOrder: 0,
+        isFavorite: false,
+        isArchived: true,
+        isLocked: false,
+      },
+      {
+        id: 'n-child',
+        parentNoteId: 'n-parent',
+        title: 'Child',
+        content: 'inside',
+        createdAt: 2,
+        updatedAt: 2,
+        sortOrder: 0,
+        isFavorite: false,
+        isArchived: false,
+        isLocked: false,
+      },
+    ]);
+    legacy.close();
+
+    const upgraded = new StashDatabase(name);
+    await upgraded.open();
+
+    // Nothing was added or dropped.
+    expect(await upgraded.links.count()).toBe(2);
+    expect(await upgraded.folders.count()).toBe(1);
+    expect(await upgraded.notes.count()).toBe(2);
+
+    // The archived link is an ordinary link again, with everything about it intact.
+    const restored = await upgraded.links.get('l-archived');
+    expect(restored?.isArchived).toBe(false);
+    expect(restored?.url).toBe('https://example.com/archived');
+    expect(restored?.userNote).toBe('the note I thought I had lost');
+    expect(restored?.folderId).toBe('f-dev');
+    expect(restored?.createdAt).toBe(20);
+    // Favourites, locks and folder names are untouched by the migration.
+    expect(restored?.isFavorite).toBe(true);
+    expect((await upgraded.folders.get('f-dev'))?.isLocked).toBe(true);
+    expect((await upgraded.folders.get('f-dev'))?.name).toBe('Developer');
+
+    // Note hierarchy survives, and the archived root comes back too.
+    expect((await upgraded.notes.get('n-parent'))?.isArchived).toBe(false);
+    expect((await upgraded.notes.get('n-child'))?.parentNoteId).toBe('n-parent');
+
+    // The recovery is recorded, so "how many did this update bring back" is a
+    // question the database can answer.
+    const schemaInfo = (await upgraded.meta.get('db.schemaInfo'))?.value as {
+      version: number;
+      restoredFromArchive: { links: number; notes: number };
+    };
+    expect(schemaInfo.version).toBe(6);
+    expect(schemaInfo.restoredFromArchive).toEqual({ links: 1, notes: 1 });
+
+    upgraded.close();
+    await Dexie.delete(name);
+  });
+
   it('keeps unrelated preferences across a migration', async () => {
     const name = 'stash-migration-meta-test';
     await createLegacyVault(name, async (legacy) => {

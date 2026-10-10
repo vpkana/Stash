@@ -27,6 +27,7 @@ import {
   Copy as PhCopy,
   Desktop as PhDesktop,
   DeviceMobile as PhDeviceMobile,
+  DotsSixVertical as PhDotsSixVertical,
   DotsThree as PhDotsThree,
   DownloadSimple as PhDownloadSimple,
   EnvelopeSimple as PhEnvelopeSimple,
@@ -48,6 +49,7 @@ import {
   House as PhHouse,
   Image as PhImage,
   Info as PhInfo,
+  Key as PhKey,
   Lightning as PhLightning,
   Lightbulb as PhLightbulb,
   LinkBreak as PhLinkBreak,
@@ -84,6 +86,7 @@ import {
   TextB as PhTextB,
   TextH as PhTextH,
   TextItalic as PhTextItalic,
+  TextStrikethrough as PhTextStrikethrough,
   Translate as PhTranslate,
   Trash as PhTrash,
   Tray as PhTray,
@@ -210,6 +213,7 @@ export const Pencil = icon(PhPencil, 'Pencil');
 export const PencilLine = icon(PhPencilLine, 'PencilLine');
 export const Bold = icon(PhTextB, 'Bold');
 export const Italic = icon(PhTextItalic, 'Italic');
+export const Strikethrough = icon(PhTextStrikethrough, 'Strikethrough');
 export const Heading2 = icon(PhTextH, 'Heading2');
 export const List = icon(PhListBullets, 'List');
 export const ListChecks = icon(PhListChecks, 'ListChecks');
@@ -256,6 +260,9 @@ export const Users = icon(PhUsers, 'Users');
 export const Wallet = icon(PhWallet, 'Wallet');
 export const Zap = icon(PhLightning, 'Zap');
 export const Play = icon(PhPlay, 'Play');
+/** The grip on a reorderable row. Drawn as dots because a handle is a hint, not a control. */
+export const DotsSixVertical = icon(PhDotsSixVertical, 'DotsSixVertical');
+export const Key = icon(PhKey, 'Key');
 export const Image = icon(PhImage, 'Image');
 export const Languages = icon(PhTranslate, 'Languages');
 export const Mail = icon(PhEnvelopeSimple, 'Mail');

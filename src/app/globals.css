@@ -534,6 +534,205 @@
   color: var(--accent);
 }
 
+/*
+ * Dragging a row to reorder it.
+ *
+ * The dragged row dims rather than following the pointer. Following the pointer
+ * means a transform on the row plus a placeholder in the flow, and with variable
+ * row heights that placeholder has to be measured on every move — a lot of
+ * machinery to answer a question the drop line already answers precisely. What
+ * the user needs to know is *where it will land*, and that is the line.
+ *
+ * The line is drawn from the row's own data attribute, so the dragging state and
+ * the visual are decided in one place (the hook) and rendered in another (here)
+ * without a class name to keep in sync.
+ */
+.row-drag {
+  position: relative;
+  transition: opacity 140ms ease-out;
+}
+
+.row-drag-lifted {
+  opacity: 0.4;
+}
+
+.row-drag[data-drop-edge='top']::before,
+.row-drag[data-drop-edge='bottom']::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0.75rem;
+  block-size: 2px;
+  border-radius: 1px;
+  background-color: var(--accent);
+}
+
+.row-drag[data-drop-edge='top']::before {
+  inset-block-start: 0;
+}
+
+.row-drag[data-drop-edge='bottom']::after {
+  inset-block-end: 0;
+}
+
+/*
+ * The editable note body.
+ *
+ * A contentEditable is not a `<textarea>`: the browser gives it margins on
+ * paragraphs, its own idea of list indentation and no placeholder at all.
+ * Everything here is the difference between "a div you can type in" and
+ * "a document" — and every value is a token from this file or a step on the
+ * app's type scale, so a note reads like the rest of the interface.
+ */
+.note-body {
+  min-block-size: 12rem;
+  overflow-wrap: anywhere;
+}
+
+.note-body:empty::before {
+  content: attr(data-placeholder);
+  color: var(--subtle-fg);
+}
+
+.note-body > * + * {
+  margin-block-start: 0.75rem;
+}
+
+.note-body p {
+  margin: 0;
+}
+
+.note-body h1,
+.note-body h2 {
+  margin: 0;
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.note-body h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.note-body ul,
+.note-body ol {
+  margin: 0;
+  padding-inline-start: 1.35rem;
+  list-style-position: outside;
+}
+
+.note-body ul {
+  list-style: disc;
+}
+
+.note-body ol {
+  list-style: decimal;
+}
+
+.note-body li {
+  margin-block-start: 0.25rem;
+}
+
+/* Nested lists from `execCommand` keep their own bullets, one step in. */
+.note-body li > ul,
+.note-body li > ol {
+  margin-block-start: 0.25rem;
+}
+
+.note-body li[data-indent='1'] {
+  margin-inline-start: 1.25rem;
+}
+.note-body li[data-indent='2'] {
+  margin-inline-start: 2.5rem;
+}
+.note-body li[data-indent='3'],
+.note-body li[data-indent='4'] {
+  margin-inline-start: 3.75rem;
+}
+
+/*
+ * A checklist item's box.
+ *
+ * Drawn rather than typed: the marker has to be visible while editing *and*
+ * absent from the text, because the text is what gets serialised back to
+ * Markdown as `- [ ] `. A `::before` gives exactly that — the box is paint, the
+ * item's content is content.
+ */
+.note-body li[data-checkbox] {
+  list-style: none;
+  position: relative;
+  padding-inline-start: 1.6rem;
+}
+
+.note-body li[data-checkbox]::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0.32em;
+  inline-size: 1.05rem;
+  block-size: 1.05rem;
+  border-radius: 0.3rem;
+  border: 1.5px solid var(--border-strong);
+  background-color: var(--surface);
+}
+
+.note-body li[data-checkbox='x'] {
+  color: var(--muted-fg);
+}
+
+.note-body li[data-checkbox='x']::before {
+  content: '✓';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  line-height: 1;
+  border-color: var(--accent);
+  background-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.note-body blockquote {
+  margin: 0;
+  padding-inline-start: 0.75rem;
+  border-inline-start: 2px solid var(--border-strong);
+  color: var(--muted-fg);
+}
+
+.note-body pre {
+  margin: 0;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background-color: var(--surface-2);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-body code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.note-body :not(pre) > code {
+  padding: 0.1rem 0.3rem;
+  border-radius: 0.3rem;
+  background-color: var(--surface-2);
+  font-size: 0.9em;
+}
+
+.note-body hr {
+  border: 0;
+  border-block-start: 1px solid var(--border);
+}
+
+.note-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* Tap feedback that does not rely on hover, which phones do not have. */
 @utility tap {
   transition:

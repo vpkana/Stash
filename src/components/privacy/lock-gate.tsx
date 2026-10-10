@@ -13,24 +13,30 @@ import { PasscodeInput } from './passcode-input';
  * The unlock prompt.
  *
  * This is **not** a lock screen for the app, and deliberately so. Stash asks for
- * nothing to open: there is no app password, and the vault is not hidden behind a
- * gate. What is locked is content — a protected folder's contents are ciphertext
- * on disk, so they read as locked rows and are simply not there to show.
+ * nothing to open: the vault is not hidden behind a gate. What is locked is
+ * content — a protected folder's contents are ciphertext on disk, so they read as
+ * locked rows and are simply not there to show.
  *
  * This dialog exists for exactly one moment: the user tried to cross into a
- * protected folder and the system prompt did not open it. That happens when the
- * prompt is cancelled, when it fails, or when this device has no way to prompt at
- * all — and in all three cases the honest answer is a sentence, not silence.
+ * protected folder and it did not open. That happens when the prompt is
+ * cancelled, when it fails, when the device has no prompt at all, or when the
+ * device prompt has been switched off — and in all four cases the honest answer is
+ * a way to get in, not a sentence explaining why there isn't one.
  *
- * What it grants is that one folder. The vault holds a single key, so the seal
- * itself is all-or-nothing, but access is decided per boundary: passing this for
+ * ## Two ways in, both on screen
+ *
+ * The device button and the passcode field are shown **together** whenever both
+ * exist, rather than one appearing after the other fails. That is the fix for the
+ * bug this screen used to have: a vault whose five folders were locked and whose
+ * biometric switch had been turned off showed a card that explained the device
+ * could not prompt and then stopped, with the passcode field gated behind a flag
+ * that only a vault created by an older build could set. A fallback you have to
+ * qualify for is not a fallback.
+ *
+ * What it grants is one folder. The vault holds a single key, so the seal itself
+ * is all-or-nothing, but access is decided per boundary: passing this for
  * `Private` opens `Private` and everything beneath it and leaves every other
  * locked folder exactly as shut as it was.
- *
- * One branch survives for a vault made by an earlier build whose only wrap was a
- * passcode: that vault has no other key in existence, and asking for the passcode
- * is the difference between opening it and destroying access to it. The field is
- * never offered for anything else and nothing writes a passcode any more.
  */
 
 const NOUNS: Record<RevealKind, string> = {
@@ -64,8 +70,6 @@ export function LockGate() {
     hasRevealRequest: revealRequest !== null,
   });
   const devicePath = deviceAuthAvailable && deviceUnlockReady;
-  /** A vault from an older build whose only key is a passcode: nothing else can open it. */
-  const legacyPasscodeOnly = passcodeSet && !devicePath;
 
   const submit = React.useCallback(async () => {
     if (passcode.length === 0) return;
@@ -91,16 +95,18 @@ export function LockGate() {
 
         <h1 className="text-title mt-3 font-semibold tracking-tight text-fg">{noun}</h1>
         <p className="text-meta mt-1.5 leading-relaxed text-muted">
-          {devicePath
-            ? `Unlock with ${devicePromptName(deviceStoreKind)} to open it. This opens the folder you asked for and nothing else; the rest of Stash stays exactly as it was.`
-            : legacyPasscodeOnly
-              ? 'This vault was created with a passcode, and its key is wrapped by that passcode alone — there is no device key to ask.'
-              : 'This device cannot show its lock prompt right now, so this folder cannot be opened here. Everything else stays readable.'}
+          {devicePath && passcodeSet
+            ? `Unlock with ${devicePromptName(deviceStoreKind)}, or type your passcode. This opens the folder you asked for and nothing else.`
+            : passcodeSet
+              ? 'Type your passcode to open it. This opens the folder you asked for and nothing else; the rest of Stash stays exactly as it was.'
+              : devicePath
+                ? `Unlock with ${devicePromptName(deviceStoreKind)} to open it. This opens the folder you asked for and nothing else; the rest of Stash stays exactly as it was.`
+                : 'This vault has no passcode and this device cannot prompt, so this folder cannot be opened here. Everything else stays readable.'}
         </p>
 
         {devicePath ? (
           <Button
-            variant="primary"
+            variant={passcodeSet ? 'accentSoft' : 'primary'}
             size="lg"
             className="mt-4 w-full"
             disabled={busy}
@@ -115,31 +121,20 @@ export function LockGate() {
           </Button>
         ) : null}
 
-        {message ? (
-          <p className="text-meta mt-3 leading-relaxed text-danger" role="status">
-            {message}
-          </p>
-        ) : null}
-
-        {legacyPasscodeOnly ? (
+        {passcodeSet ? (
           <div className="mt-4">
             <PasscodeInput
               label="Passcode"
               value={passcode}
-              onChange={setPasscode}
+              onChange={(value) => setPasscode(value)}
               onSubmit={() => void submit()}
-              autoFocus
+              autoFocus={!devicePath}
               disabled={busy}
               tone={message ? 'danger' : 'default'}
-              hint={
-                <span>
-                  This vault was created with a passcode, and its key is wrapped by that passcode alone — there is no
-                  device key to ask. Nothing can reset it, including us.
-                </span>
-              }
+              hint={message ?? undefined}
             />
             <Button
-              variant="accentSoft"
+              variant={devicePath ? 'surface' : 'primary'}
               size="lg"
               className="mt-3 w-full"
               disabled={busy || passcode.length === 0}
@@ -153,7 +148,27 @@ export function LockGate() {
               Unlock
             </Button>
           </div>
-        ) : null}
+        ) : (
+          <>
+            {message ? (
+              <p className="text-meta mt-3 leading-relaxed text-danger" role="status">
+                {message}
+              </p>
+            ) : null}
+            {/*
+              * No passcode and no working device prompt. The one honest thing to
+              * say is what is still reachable and what is not — and where to go
+              * if the device prompt can be restored, because that is the only
+              * thing that opens these rows.
+              */}
+            {keyringPresent && !devicePath ? (
+              <p className="text-meta mt-3 leading-relaxed text-subtle">
+                Re-enable the device prompt in your system settings (a screen lock, or fingerprint or face)
+                and this vault opens again. Nothing has been deleted.
+              </p>
+            ) : null}
+          </>
+        )}
 
         <Button variant="ghost" className="mt-2 w-full" disabled={busy} onClick={() => clearReveal()}>
           Not now

@@ -3,11 +3,30 @@
     The Android adaptive-icon foreground.
 
     Android draws the background full-bleed and masks the result, so this file is
-    only the mark: no tile, no background, transparent everywhere else. The mark
-    is scaled to fill the 66-unit safe zone, which is the region every launcher
-    mask (circle, squircle, teardrop) is guaranteed to keep.
+    only the mark: no tile, no background, transparent everywhere else.
+
+    ## The scale, and why it is what it is
+
+    The canvas is 108 units, and the region guaranteed to survive *any* launcher
+    mask — circle, squircle, teardrop, whatever an OEM ships — is a circle 66
+    units across, centred. So the mark has to fit inside that circle, corner
+    boxes included, not merely inside the 108-unit square.
+
+    At `scale(0.27637)` it did not: the ribbon's drawn box was 40.5 × 63.0 units
+    (half-diagonal 41.3) against a safe radius of 33, which put both bottom tips
+    outside the circle. On a squircle that is invisible; on a round mask the tips
+    are cut off, which is exactly how it was reported.
+
+    `scale(0.22)` gives a box of 40.5 × 50.2 units and a half-diagonal of 32.3 —
+    inside the 66-unit circle with a little room to spare, and 46% of the canvas,
+    which is the proportion Google's own adaptive icons use.
+
+    The mark therefore reads slightly smaller on the home screen than it does
+    inside the app's own rounded tile (`icon.svg`, where the tile *is* the shape
+    and 54% is right). That difference is intentional: the two files are answering
+    to two different sets of geometry.
   -->
-  <g transform="translate(54 53.6) scale(0.27637) translate(-256 -254)">
+  <g transform="translate(54 53.6) scale(0.22) translate(-256 -254)">
     <path
       d="M 204 140 H 308 Q 348 140 348 180 V 352 Q 348 368 336 368 L 268 322 Q 256 317 244 322 L 176 368 Q 164 368 164 352 V 180 Q 164 140 204 140 Z"
       fill="#FFFFFF"

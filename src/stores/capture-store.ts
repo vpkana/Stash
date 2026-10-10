@@ -65,6 +65,25 @@ interface CaptureState {
   unreadable: IncomingShare | null;
 
   destination: DestinationSelection;
+  /**
+   * True when the destination was inferred from where the user already was —
+   * inside a folder, or on the Inbox — rather than guessed from history or
+   * chosen by hand.
+   *
+   * It changes nothing about where the link goes; it changes what the sheet
+   * *asks*. A destination the user arrived with is a fact to state, and the full
+   * destination tree underneath it is a question they already answered by walking
+   * into the folder they were standing in.
+   */
+  destinationFromContext: boolean;
+  /**
+   * Whether the full destination tree is on screen.
+   *
+   * Starts open for a capture with no context (a share from another app has to
+   * be filed by hand once) and closed when the destination is already known, with
+   * one tap to open it for anyone who wants to file it somewhere else after all.
+   */
+  showDestinationPicker: boolean;
   /** True once the user chose to save despite an existing copy. */
   duplicateAcknowledged: boolean;
   duplicates: DuplicateMatch[];
@@ -74,7 +93,20 @@ interface CaptureState {
   showCreateFolder: boolean;
 
   openFromShare: (share: IncomingShare) => Promise<void>;
-  openManual: () => void;
+  /**
+   * Open a manual capture, optionally already knowing where it is going.
+   *
+   * `selection` is the caller telling the store "the user is standing here". The
+   * shell passes the folder the user is browsing, which is the whole fix for the
+   * redundant destination step: saving from inside `Developer` files into
+   * `Developer` without a question.
+   *
+   * Omitting it means "no context" — a capture started from Home, Search or the
+   * Inbox — and then the remembered destination is used and the picker stays on
+   * screen, because a guess is worth confirming and a fact is not.
+   */
+  openManual: (selection?: DestinationSelection) => void;
+  setShowDestinationPicker: (value: boolean) => void;
   setDraftField: (field: 'url' | 'title' | 'note', value: string) => void;
   setSaveOtherUrls: (value: boolean) => void;
   selectDestination: (selection: DestinationSelection) => void;
@@ -114,6 +146,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
   draft: null,
   unreadable: null,
   destination: INBOX_DESTINATION,
+  destinationFromContext: false,
+  showDestinationPicker: true,
   duplicateAcknowledged: false,
   duplicates: [],
   duplicateCheckDone: false,
@@ -167,6 +201,10 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       unreadable: null,
       draft,
       destination: defaultDestination(),
+      // A share arrives from another app with no context inside Stash, so the
+      // destination is the one thing the sheet legitimately has to ask about.
+      destinationFromContext: false,
+      showDestinationPicker: true,
       duplicateAcknowledged: false,
       duplicates: [],
       duplicateCheckDone: false,
@@ -177,13 +215,25 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     await get().recheckDuplicates();
   },
 
-  openManual: () => {
+  openManual: (selection) => {
+    /*
+     * Where the user is standing wins over where they filed things last.
+     *
+     * A capture started from inside `Developer` is a capture that belongs in
+     * `Developer`, and a capture started on the Inbox belongs in the Inbox: asking
+     * in either case is the step this removes. Only a capture with no context at
+     * all keeps the remembered destination *and* the picker — a guess is worth
+     * confirming once, in one place, when the app genuinely does not know.
+     */
+    const contextual = selection ?? null;
     set({
       status: 'open',
       mode: 'manual',
       draft: emptyDraft(),
       unreadable: null,
-      destination: defaultDestination(),
+      destination: contextual ?? defaultDestination(),
+      destinationFromContext: contextual !== null,
+      showDestinationPicker: contextual === null,
       duplicateAcknowledged: false,
       duplicates: [],
       duplicateCheckDone: false,
@@ -211,7 +261,10 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
 
   setSaveOtherUrls: (value) => set({ saveOtherUrls: value }),
 
-  selectDestination: (selection) => set({ destination: selection, showCreateFolder: false }),
+  selectDestination: (selection) =>
+    set({ destination: selection, showCreateFolder: false, showDestinationPicker: false }),
+
+  setShowDestinationPicker: (value) => set({ showDestinationPicker: value }),
 
   /**
    * Choose a destination, crossing a lock boundary only if the choice needs it.
@@ -224,7 +277,7 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     if (selection.kind === 'folder' && selection.folderId) {
       if (!(await requireFolderAccess(selection.folderId))) return false;
     }
-    set({ destination: selection, showCreateFolder: false });
+    set({ destination: selection, showCreateFolder: false, showDestinationPicker: false });
     return true;
   },
 
@@ -346,6 +399,8 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       duplicates: [],
       duplicateCheckDone: false,
       showCreateFolder: false,
+      showDestinationPicker: true,
+      destinationFromContext: false,
       duplicateAcknowledged: false,
       saveOtherUrls: false,
     }),

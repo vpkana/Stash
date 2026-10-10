@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Clock, Search as SearchIcon, SearchX, Tag as TagIcon, X } from '@/components/ui/icons';
 import type { Note, SavedLink } from '@/db/types';
-import { SEARCH_FILTERS, searchVault, type SearchFilter } from '@/lib/search';
+import { SEARCH_FILTERS, searchFilterFrom, searchVault, type SearchFilter } from '@/lib/search';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { useVaultStore, selectTagUsage } from '@/stores/vault-store';
@@ -28,11 +28,9 @@ import { cn } from '@/lib/utils';
  * not easier, and it hides which kind of thing matched.
  */
 
-const FILTER_IDS = new Set(SEARCH_FILTERS.map((filter) => filter.id));
-
-function isFilter(value: string | null): value is SearchFilter {
-  return value !== null && FILTER_IDS.has(value as SearchFilter);
-}
+/* `?filter=` is user-visible state, so it has to survive being hand-edited or
+ * stale. `searchFilterFrom` keeps only ids this build still has — which is how a
+ * bookmark of `?filter=archived` opens the vault instead of an error. */
 
 function SearchView() {
   const params = useSearchParams();
@@ -43,7 +41,7 @@ function SearchView() {
   const initialQuery = params.get('q') ?? '';
 
   const [query, setQuery] = React.useState(initialQuery);
-  const [filter, setFilter] = React.useState<SearchFilter>(isFilter(initialFilter) ? initialFilter : 'all');
+  const [filter, setFilter] = React.useState<SearchFilter>(searchFilterFrom(initialFilter));
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
   const [activeNote, setActiveNote] = React.useState<Note | null>(null);
 
@@ -199,6 +197,9 @@ function SearchView() {
                 subtitle={hit.path}
                 onOpen={() => router.push(`/library?folder=${hit.folder.id}`)}
                 onShowActions={() => router.push(`/library?folder=${hit.folder.id}`)}
+                onToggleFavorite={() =>
+                  void useVaultStore.getState().toggleFolderFavorite(hit.folder.id)
+                }
               />
             ))}
           </ListSurface>
@@ -261,22 +262,18 @@ function SearchView() {
           <p className="text-row font-semibold text-fg">
             {query.trim()
               ? 'Nothing matches that'
-              : filter === 'archived'
-                ? 'Nothing is archived'
-                : filter === 'favorites'
-                  ? 'No favorites yet'
-                  : filter === 'all'
-                    ? 'Your vault is empty'
-                    : 'Nothing here yet'}
+              : filter === 'favorites'
+                ? 'No favorites yet'
+                : filter === 'all'
+                  ? 'Your vault is empty'
+                  : 'Nothing here yet'}
           </p>
           <p className="max-w-xs text-meta leading-relaxed text-muted">
             {query.trim()
               ? 'Search covers link titles, addresses, your own notes and subnotes, tags and folder names. Everything is searched on this device.'
-              : filter === 'archived'
-                ? 'Archiving keeps a link or note without deleting it. Archived items are hidden from every other view, and this filter is the one place they show up — so they stay findable instead of gone.'
-                : filter === 'favorites'
-                  ? 'Star a link, a note or a folder and it appears here. Favoriting never moves anything, so your structure stays exactly as you built it.'
-                  : 'Save a link or write a note and it will show up here, searchable offline.'}
+              : filter === 'favorites'
+                ? 'Star a link, a note or a folder and it appears here. Favoriting never moves anything, so your structure stays exactly as you built it.'
+                : 'Save a link or write a note and it will show up here, searchable offline.'}
           </p>
         </div>
       ) : null}
@@ -285,13 +282,6 @@ function SearchView() {
         <p className="flex items-center justify-center gap-1.5 px-4 py-6 text-meta text-subtle">
           <Clock size={13} strokeWidth={2} aria-hidden />
           Newest first · searched offline
-        </p>
-      ) : null}
-
-      {filter === 'archived' && (outcome.links.length > 0 || outcome.notes.length > 0) ? (
-        <p className="px-5 py-6 text-center text-meta leading-relaxed text-subtle">
-          Archived items are hidden from Home, the Library and every other filter. Open one and choose
-          &ldquo;Restore from archive&rdquo; to bring it back.
         </p>
       ) : null}
 

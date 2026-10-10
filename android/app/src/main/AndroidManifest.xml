@@ -9,12 +9,30 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!--
+            `windowSoftInputMode="adjustResize"` is load-bearing for writing a note.
+
+            Android's default for this attribute is `adjustUnspecified`, which lets
+            the system choose — and on a WebView it often chooses to pan or overlay
+            instead of resizing, which is how the soft keyboard ends up covering the
+            field being typed into and how a fixed bottom bar ends up drawn over the
+            keys. `adjustResize` states the intent instead: the window shrinks to the
+            space above the keyboard, so the layout the web layer measures is the
+            layout the user can actually see, `position: fixed` elements land above
+            the keyboard rather than behind it, and no code has to guess a keyboard
+            height.
+
+            It is paired with hiding the tab bar while an editor is open
+            (`stores/editor-store.ts`): resizing keeps the *field* visible, and the
+            bar is removed so there is nothing left to overlap.
+        -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
 
             <intent-filter>

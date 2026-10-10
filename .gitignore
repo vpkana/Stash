@@ -25,3 +25,4 @@ android/capacitor-cordova-android-plugins/
 .DS_Store
 Thumbs.db
 /.freebuff/
+.vercel

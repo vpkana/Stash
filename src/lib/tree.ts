@@ -360,7 +360,6 @@ export function folderDeletionImpact(
   let directLinkCount = 0;
   let descendantLinkCount = 0;
   for (const link of links) {
-    if (link.isArchived) continue;
     if (link.folderId === folderId) directLinkCount += 1;
     else if (link.folderId && descendantSet.has(link.folderId)) descendantLinkCount += 1;
   }

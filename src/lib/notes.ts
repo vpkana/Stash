@@ -1,33 +1,32 @@
 import type { Note, SavedLink } from '@/db/types';
 import { displayUrl } from '@/lib/format';
 import { labelForDomain } from '@/lib/share/types';
-import { noteDescendantIds } from '@/lib/tree';
 
 /**
  * Note-domain helpers that sit between the storage layer and the UI.
  *
  * Nothing here talks to IndexedDB or to React, so every rule about how a note
- * behaves (what "archived" hides, what a title falls back to, how a link
- * becomes the seed of a note) is testable on plain objects.
+ * behaves (what a title falls back to, how a link becomes the seed of a note) is
+ * testable on plain objects.
  */
 
 /**
  * The notes a browsing UI should show.
  *
- * Archiving a note hides its whole subtree, not just the row: a visible child
- * whose parent has vanished would be unreachable and impossible to explain.
- * The data is untouched -- unarchiving brings the branch straight back.
+ * This used to remove archived notes and their whole subtrees. It no longer
+ * removes anything, and the reason is worth keeping written down: archiving was
+ * the one state a user could enter and not get out of, because it hid a row from
+ * every surface they were looking at. The field is still on the type — a backup
+ * written by an older build carries it, and version 6 of the database migrates
+ * every archived row back to false — but nothing can set it and nothing hides on
+ * it any more.
+ *
+ * It is kept as a named function rather than deleted so every caller keeps
+ * stating, in one place, that "what a browsing UI shows" is a decision this
+ * module makes; if a visibility rule is ever needed again it belongs here.
  */
 export function visibleNotes(notes: readonly Note[]): Note[] {
-  const archivedRoots = notes.filter((note) => note.isArchived);
-  if (archivedRoots.length === 0) return [...notes];
-
-  const hidden = new Set<string>();
-  for (const root of archivedRoots) {
-    hidden.add(root.id);
-    for (const id of noteDescendantIds(notes, root.id)) hidden.add(id);
-  }
-  return notes.filter((note) => !hidden.has(note.id));
+  return [...notes];
 }
 
 export const NOTE_TITLE_MAX = 120;

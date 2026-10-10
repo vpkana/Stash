@@ -193,18 +193,22 @@ describe('deletion impact', () => {
 });
 
 describe('visible notes', () => {
-  it('hides an archived note together with its whole subtree', () => {
-    const withArchive = TREE.map((n) => (n.id === 'reg' ? { ...n, isArchived: true } : n));
-    const visible = visibleNotes(withArchive);
-    const ids = new Set(visible.map((n) => n.id));
-    expect(ids.has('reg')).toBe(false);
-    expect(ids.has('lin')).toBe(false);
-    expect(ids.has('frm')).toBe(false);
+  it('keeps a note carrying the legacy archive flag, and its whole subtree', () => {
+    // This is the regression guard for the bug that lost links and notes: the
+    // flag used to remove a row and its descendants from every browsing surface.
+    // It hides nothing now.
+    const withFlag = TREE.map((n) => (n.id === 'reg' ? { ...n, isArchived: true } : n));
+    const ids = new Set(visibleNotes(withFlag).map((n) => n.id));
+    expect(ids.has('reg')).toBe(true);
+    expect(ids.has('lin')).toBe(true);
+    expect(ids.has('frm')).toBe(true);
     expect(ids.has('svm')).toBe(true);
   });
 
-  it('returns everything untouched when nothing is archived', () => {
+  it('returns everything, flagged or not', () => {
     expect(visibleNotes(TREE)).toHaveLength(TREE.length);
+    const allFlagged = TREE.map((n) => ({ ...n, isArchived: true }));
+    expect(visibleNotes(allFlagged)).toHaveLength(TREE.length);
   });
 });
 

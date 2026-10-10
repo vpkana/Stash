@@ -2,7 +2,6 @@
 
 import * as React from 'react';
 import {
-  Archive,
   ArrowLeft,
   Check,
   Copy,
@@ -73,6 +72,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
   const [note, setNote] = React.useState(link?.userNote ?? '');
   const [busy, setBusy] = React.useState(false);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
+  const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
   const protectedId = link?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.links.has(protectedId));
   const tagNames = useVaultStore((state) => selectTagsForLink(state, protectedId));
@@ -230,7 +230,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
             />
           ) : mode === 'attach-note' ? (
             <NotePicker
-              notes={notes.filter((candidate) => !candidate.isArchived)}
+              notes={notes}
               selectedNoteId={null}
               onSelect={(parentId) => {
                 if (parentId) void attachToNote(parentId);
@@ -393,6 +393,16 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
                     router.push('/settings');
                     return;
                   }
+                  // See the folder sheet: a passcode has to exist before anything
+                  // new is locked, so the device prompt is never the only key.
+                  if (!passcodeSet) {
+                    toast('Set a passcode first, so this link can never become unreachable', {
+                      tone: 'danger',
+                    });
+                    close();
+                    router.push('/settings');
+                    return;
+                  }
                   if (isProtected && !link.isLocked) {
                     toast('This link is inside a locked folder, so it is already protected.');
                     return;
@@ -420,15 +430,6 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
                     .getState()
                     .setLinkUnavailable(link.id, next)
                     .then(() => toast(next ? 'Marked as unavailable' : 'Marked as working'));
-                  close();
-                }}
-              />
-              <ActionRow
-                icon={<Archive size={18} strokeWidth={1.9} aria-hidden />}
-                label={link.isArchived ? 'Restore from archive' : 'Archive link'}
-                onClick={() => {
-                  void useVaultStore.getState().archiveLink(link.id, !link.isArchived);
-                  toast(link.isArchived ? 'Restored' : 'Archived');
                   close();
                 }}
               />

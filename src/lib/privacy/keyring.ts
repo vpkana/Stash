@@ -63,6 +63,20 @@ import { enrollDeviceCredential, forgetDeviceCredential, hasDeviceCredential } f
 const DEVICE_KEY_NAME = 'stash.privacy.deviceKey';
 
 /**
+ * Shortest passcode the app will accept.
+ *
+ * PBKDF2 at 210,000 iterations is what stands between a stolen keyring and an
+offline guess, and that cost is paid per candidate. A six-character passcode over
+ * a realistic alphabet is past the point where guessing is cheaper than the
+ * alternatives an attacker already has; anything shorter starts to lean on the
+ * iteration count to do work it cannot do. This is a floor, not advice — the field
+ * accepts anything longer.
+ */
+export const MIN_PASSCODE_LENGTH = 6;
+
+export const MIN_PASSCODE_MESSAGE = `Use at least ${MIN_PASSCODE_LENGTH} characters.`;
+
+/**
  * The unwrapped vault key, in memory only.
  *
  * Module scope rather than a store so that nothing serialises it by accident: a
@@ -135,25 +149,32 @@ export interface KeySetupResult {
 }
 
 /**
- * Create a keyring whose only wrap is a passcode.
+ * Create a keyring whose first wrap is a passcode.
  *
- * **Legacy / interop only.** The app no longer offers a passcode, because the
- * system prompt is a stronger gate and a second secret was one more thing to
- * lose. This exists for two reasons, both about not destroying old data:
+ * This is the setup path again, and there is one sentence behind that: a vault
+ * must not be able to become unreachable because a *setting* changed. Locking
+ * used to be device-only — no passcode, nothing to remember — and the cost was
+ * exactly the failure the user hit: turn the biometric option off and the locked
+ * folders have no door left. So locking now starts with a passcode, and the
+ * device prompt is an *addition* to it rather than a replacement for it. Nothing
+ * the OS does to an enrollment can take a passcode away.
  *
- *  - a vault created by an earlier build is opened by its passcode wrap, so the
- *    shape that writes it has to stay readable;
- *  - a backup file from an earlier build carries the same wrap, and adopting it
- *    has to produce a keyring this code can open.
+ * It also stays the path a vault created by an earlier build is opened with, and
+ * the one a backup restored onto another device uses.
  *
- * Nothing in the app calls it to set up locking any more; `createKeyringWithDevice`
- * is the only setup path. Refuses if a keyring already exists: replacing one
- * would make every currently-sealed item permanently unreadable, so there is no
- * code path that does it implicitly.
+ * Refuses if a keyring already exists: replacing one would make every
+ * currently-sealed item permanently unreadable, so there is no code path that
+ * does it implicitly.
  */
 export async function createKeyring(passcode: string): Promise<KeySetupResult> {
   if (await hasKeyring()) {
     return { ok: false, message: 'This vault is already locked.' };
+  }
+  // The length floor lives here as well as in the store, because this is the
+  // function that actually writes the wrap: a caller added later should not be
+  // able to create a vault whose only way in is four characters long.
+  if (passcode.length < MIN_PASSCODE_LENGTH) {
+    return { ok: false, message: MIN_PASSCODE_MESSAGE };
   }
   const vault = await generateVaultKey();
   const salt = newSalt();
@@ -174,15 +195,17 @@ export async function createKeyring(passcode: string): Promise<KeySetupResult> {
 }
 
 /**
- * Turn locking on using the device alone, with no passcode to invent.
+ * Create a keyring wrapped by a device key alone.
  *
- * The vault key is wrapped under a device key and nothing else, which is what
- * makes "unlock" a system prompt instead of a text field. The cost is real and
- * is stated in the UI before this is called: there is no second way in, so
- * clearing the app's data, losing the device, or restoring onto a new one makes
- * the locked items permanently unreadable. That is the deliberate trade — a
- * person who cannot pass the system prompt should not be reading them anyway —
- * and it is why the screen that turns locking on says so in those words.
+ * **Not the setup path any more, and deliberately kept.** A vault whose only wrap
+ * is a device key is one biometric setting away from being unopenable, which is
+ * the bug the passcode exists to remove — so locking now starts with a passcode
+ * and arms this afterwards, through {@link enableDeviceUnlock}.
+ *
+ * Nothing in the app calls this. It stays because a keyring in the shape it
+ * writes is still a valid keyring: it could have been written by an earlier
+ * build, and code that reads a vault has to be able to talk about the shape it is
+ * reading. Deleting the writer would not delete the readers.
  */
 export async function createKeyringWithDevice(): Promise<KeySetupResult> {
   if (await hasKeyring()) {
@@ -351,6 +374,88 @@ export async function destroyKeyring(): Promise<void> {
   await forgetDeviceCredential();
   await db.security.delete(SECURITY_KEYS.keyring);
   vaultKey = null;
+}
+
+/**
+ * Add a passcode wrap to a vault that is already locked.
+ *
+ * This is the safety net the device prompt cannot be. A device key can stop
+ * working for reasons that have nothing to do with the user's memory — the
+ * platform invalidates it, the enrollment is removed, a biometric setting is
+ * switched off — and on a vault whose only wrap was that key, the content behind
+ * it becomes unreachable. A passcode wrap does not have that failure mode: it
+ * depends on one thing the user knows and one algorithm that will still be here
+ * in ten years.
+ *
+ * Requires an **unlocked session**, because the vault key itself has to be in
+ * memory to be re-wrapped. That is not a limitation to work around: it is the
+ * reason setting a passcode is a screen you reach while the vault is open, and
+ * the reason the app says so plainly instead of offering a button that would have
+ * to fail.
+ *
+ * Replacing an existing wrap is the same operation — a new salt, a new PBKDF2
+ * derivation, a fresh ciphertext of the same 32 bytes. The vault key does not
+ * change, so nothing already encrypted needs re-encrypting and no data is at risk
+ * at any point in the change.
+ */
+export async function setPasscodeWrap(passcode: string): Promise<KeySetupResult> {
+  if (!vaultKey) {
+    return { ok: false, message: 'Unlock the vault first, then set a passcode.' };
+  }
+  if (passcode.length < MIN_PASSCODE_LENGTH) {
+    return { ok: false, message: MIN_PASSCODE_MESSAGE };
+  }
+
+  const keyring = await readKeyring();
+  if (!keyring) {
+    return { ok: false, message: 'This vault has no keyring to add a passcode to.' };
+  }
+
+  const salt = newSalt();
+  const wrappingKey = await deriveWrappingKey(passcode, salt);
+  const wrappedByPasscode = await wrapBytes(wrappingKey, await exportKeyBytes(vaultKey));
+
+  await writeKeyring({
+    ...keyring,
+    kdf: { algorithm: 'PBKDF2-SHA256', salt: toBase64(salt), iterations: PBKDF2_ITERATIONS },
+    wrappedByPasscode,
+    updatedAt: Date.now(),
+  });
+  return { ok: true };
+}
+
+/**
+ * Remove the passcode wrap, leaving whatever other wraps exist.
+ *
+ * The mirror image of {@link setPasscodeWrap}, and it has the same precondition
+ * for the same reason: the caller has to prove it can open the vault before it
+ * may take a way in away. The UI enforces that by requiring the current passcode
+ * or a successful device prompt first; this only refuses the case that cannot
+ * work at all.
+ *
+ * Refuses when the passcode is the *only* wrap, because that would leave a
+ * keyring with no way in — every sealed row would become ciphertext nobody holds
+ * a key for. Changing a passcode is the supported way to rotate it; there is no
+ * supported way to end up with nothing.
+ */
+export async function removePasscodeWrap(): Promise<KeySetupResult> {
+  if (!vaultKey) {
+    return { ok: false, message: 'Unlock the vault first, then change how it opens.' };
+  }
+  const keyring = await readKeyring();
+  if (!keyring) return { ok: false, message: 'This vault has no keyring.' };
+  if (!isEncryptedPayload(keyring.wrappedByDevice)) {
+    return {
+      ok: false,
+      message: 'The passcode is the only way into this vault, so it cannot be removed.',
+    };
+  }
+
+  const next: KeyringRecord = { ...keyring, updatedAt: Date.now() };
+  delete next.kdf;
+  delete next.wrappedByPasscode;
+  await writeKeyring(next);
+  return { ok: true };
 }
 
 /**

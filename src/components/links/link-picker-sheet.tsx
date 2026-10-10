@@ -49,7 +49,7 @@ export function LinkPickerSheet({ open, onClose, onPick, attachedIds, title = 'A
     // A picker is a listing, and a listing never offers protected content. A link
     // the session cannot read is not something to attach: attaching it would put
     // a reference to private content inside an ordinary note.
-    const active = links.filter((link) => !link.isArchived && !hidden.links.has(link.id));
+    const active = links.filter((link) => !hidden.links.has(link.id));
     const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
     const filtered =
       tokens.length === 0

@@ -34,7 +34,7 @@ export default function HomePage() {
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
 
   const activeLinks = React.useMemo(
-    () => links.filter((link) => !link.isArchived && !hidden.links.has(link.id)),
+    () => links.filter((link) => !hidden.links.has(link.id)),
     [links, hidden],
   );
 

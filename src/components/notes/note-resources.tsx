@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Link2, Plus, X } from '@/components/ui/icons';
+import { Link2, X } from '@/components/ui/icons';
 import type { SavedLink } from '@/db/types';
 import { displayUrl } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -17,13 +17,18 @@ import { cn } from '@/lib/utils';
  * app. This list used to give each resource a letter tile coloured from a hash
  * of its domain: six different hues that distinguished nothing, made a short
  * list look decorative, and clashed with the accent's meaning elsewhere.
+ *
+ * There is no "Attach a saved link" button here any more. Attaching is a
+ * *command* and this is a *list*, so the command moved up into the note's
+ * secondary actions (see `note-editor.tsx`) where it stops competing with the
+ * text being written. The list stays, because what a note refers to is part of
+ * reading it.
  */
 
 export interface NoteResourcesProps {
   links: readonly SavedLink[];
   onOpenLink: (link: SavedLink) => void;
   onDetach: (linkId: string) => void;
-  onAttach: () => void;
   /** Hidden while the note is locked. */
   readOnly?: boolean;
   className?: string;
@@ -33,7 +38,6 @@ export function NoteResources({
   links,
   onOpenLink,
   onDetach,
-  onAttach,
   readOnly = false,
   className,
 }: NoteResourcesProps) {
@@ -80,21 +84,9 @@ export function NoteResources({
         </ul>
       ) : (
         <p className="px-4 pb-1 text-meta leading-relaxed text-subtle">
-          No links attached. Attach a saved link to keep the source of a thought next to it.
+          No links attached. Use “Subnotes and links” above the text to attach the source of a thought to this
+          note.
         </p>
-      )}
-
-      {readOnly ? null : (
-        <div className="px-4 pt-2">
-          <button
-            type="button"
-            onClick={onAttach}
-            className="tap text-row flex w-full items-center gap-2 rounded-xl bg-surface-2 px-3.5 py-3 text-left font-medium text-accent active:bg-surface-3"
-          >
-            <Plus size={17} strokeWidth={2.1} aria-hidden />
-            Attach a saved link
-          </button>
-        </div>
       )}
     </section>
   );

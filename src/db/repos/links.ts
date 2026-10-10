@@ -68,12 +68,19 @@ export async function createLink(input: CreateLinkInput): Promise<SavedLink> {
   return record;
 }
 
-/** All non-archived links in a folder, newest first. `null` means the Inbox. */
+/**
+ * Every link in a folder, newest first. `null` means the Inbox.
+ *
+ * There is no "include archived" switch any more, and its absence is the point:
+ * a caller should not be able to ask for a list that leaves a saved link out
+ * because of a flag the user cannot see or clear. Deleted rows are excluded, but
+ * they are excluded by the snapshot, not here.
+ */
 export async function listLinksInFolder(
   folderId: string | null,
-  options: { includeNested?: boolean; includeArchived?: boolean } = {},
+  options: { includeNested?: boolean } = {},
 ): Promise<SavedLink[]> {
-  const { includeNested = false, includeArchived = false } = options;
+  const { includeNested = false } = options;
 
   let scope: SavedLink[];
   if (folderId === null) {
@@ -86,9 +93,7 @@ export async function listLinksInFolder(
     scope = await db.links.where('folderId').equals(folderId).toArray();
   }
 
-  return scope
-    .filter((link) => includeArchived || !link.isArchived)
-    .sort((a, b) => b.createdAt - a.createdAt);
+  return scope.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function listAllLinks(): Promise<SavedLink[]> {
@@ -96,24 +101,18 @@ export async function listAllLinks(): Promise<SavedLink[]> {
 }
 
 export async function listActiveLinks(): Promise<SavedLink[]> {
-  const links = await db.links.toArray();
-  return links.filter((link) => !link.isArchived);
+  return db.links.toArray();
 }
 
 /** IndexedDB cannot index booleans, so favorites are a filter, not a lookup. */
 export async function listFavoriteLinks(): Promise<SavedLink[]> {
   const links = await db.links.toArray();
-  return links
-    .filter((link) => link.isFavorite && !link.isArchived)
-    .sort((a, b) => b.createdAt - a.createdAt);
+  return links.filter((link) => link.isFavorite).sort((a, b) => b.createdAt - a.createdAt);
 }
 
 export async function listRecentLinks(limit = 8): Promise<SavedLink[]> {
   const links = await db.links.toArray();
-  return links
-    .filter((link) => !link.isArchived)
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, limit);
+  return links.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
 }
 
 export async function getLink(id: string): Promise<SavedLink | undefined> {
@@ -143,7 +142,7 @@ export async function findDuplicates(url: string, options: { excludeId?: string 
   ]);
 
   return candidates
-    .filter((link) => !link.isArchived && link.id !== options.excludeId)
+    .filter((link) => link.id !== options.excludeId)
     .map((link) => ({
       link,
       folderPath: link.folderId ? folderPathLabel(folders, link.folderId) : 'Inbox',
@@ -208,6 +207,19 @@ export async function setLinkFavorite(id: string, isFavorite: boolean): Promise<
   await db.links.update(id, { isFavorite, updatedAt: Date.now() });
 }
 
+/**
+ * Legacy field write. **Nothing in the app calls this any more.**
+ *
+ * Archiving used to hide a link from every screen the user had, which made it
+ * indistinguishable from losing it. The UI is gone and version 6 of the database
+ * restored every archived row, so there is no longer a state to set.
+ *
+ * It is kept only because the field still exists on the row — a backup written by
+ * an older build carries it and has to import cleanly, and a test needs to be
+ * able to *create* the state this app had to migrate away from. Do not call it
+ * from a component or a store: if a future feature needs to hide a link, it needs
+ * a way back that is not a filter chip on another screen.
+ */
 export async function setLinkArchived(id: string, isArchived: boolean): Promise<void> {
   await db.links.update(id, { isArchived, updatedAt: Date.now() });
 }
@@ -271,7 +283,7 @@ export async function deleteLinkPermanently(id: string): Promise<void> {
 }
 
 export async function countActiveLinks(): Promise<number> {
-  return db.links.filter((link) => !link.isArchived).count();
+  return db.links.count();
 }
 
 /**
@@ -283,7 +295,7 @@ export async function findSameHostMatches(url: string, limit = 3): Promise<Saved
   if (!host) return [];
   const links = await db.links.toArray();
   return links
-    .filter((link) => !link.isArchived && link.source === host)
+    .filter((link) => link.source === host)
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, limit);
 }

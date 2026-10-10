@@ -111,10 +111,6 @@ function NotesView() {
   const { reveal, busy: revealing } = useRevealLocked();
 
   const rootNotes = React.useMemo(() => noteChildren(visibleNotes, null), [visibleNotes]);
-  const recentNotes = React.useMemo(
-    () => [...visibleNotes].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4),
-    [visibleNotes],
-  );
   const favoriteNotes = React.useMemo(
     () => visibleNotes.filter((note) => note.isFavorite).slice(0, 4),
     [visibleNotes],
@@ -268,6 +264,10 @@ function NotesView() {
             {...(current.isLocked
               ? { onUnlock: () => void useVaultStore.getState().toggleNoteLocked(current.id, false) }
               : {})}
+            onAddSubnote={() => void createNote(current.id)}
+            onAttachLink={() => setPicking(true)}
+            subnoteCount={subnotes.length}
+            linkCount={resources.length}
             save={async (draft) => {
               await useVaultStore.getState().saveNoteDraft(current.id, draft);
             }}
@@ -291,23 +291,10 @@ function NotesView() {
             </ListSurface>
           ) : (
             <p className="px-4 pb-1 text-meta leading-relaxed text-subtle">
-              No subnotes yet. Splitting a large topic into subnotes keeps each one short and
-              findable.
+              No subnotes yet. “Subnotes and links” above the text starts one — splitting a large topic into
+              subnotes keeps each one short and findable.
             </p>
           )}
-
-          <div className="px-4 pt-2">
-            <button
-              type="button"
-              onClick={() => void createNote(current.id)}
-              className="tap flex w-full items-center gap-3 rounded-xl bg-surface-2 px-3.5 py-3 text-left active:bg-surface-3"
-            >
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-accent">
-                <FilePlus2 size={17} strokeWidth={2.1} aria-hidden />
-              </span>
-              <span className="text-row font-medium text-accent">Add subnote</span>
-            </button>
-          </div>
         </Section>
 
         <NoteResources
@@ -318,11 +305,10 @@ function NotesView() {
             void useVaultStore.getState().detachLink(current.id, linkId);
             toast('Detached. The link is still saved.');
           }}
-          onAttach={() => setPicking(true)}
         />
 
-        {/* Space for the fixed formatting bar. */}
-        <div className="h-24" />
+        {/* The editor already reserves room for its own fixed formatting bar. */}
+        <div className="h-4" />
 
         <NoteActionsSheet
           key={activeNote?.id ?? 'no-note'}
@@ -365,20 +351,24 @@ function NotesView() {
   return (
     <>
       <PageHeader>
-        <div className="flex items-end justify-between gap-3">
-          <PageTitle
-            subtitle={
-              isEmpty
-                ? 'Nothing written yet'
-                : `${pluralize(visibleNotes.length, 'note')} · offline`
-            }
-          >
-            Notes
-          </PageTitle>
-          <Button variant="accentSoft" size="icon" aria-label="New note" onClick={() => void createNote(null)}>
-            <FilePlus2 size={19} strokeWidth={2} aria-hidden />
-          </Button>
-        </div>
+        {/*
+          * No "New note" button in the header.
+          *
+          * There is already exactly one primary action in the app and it is on
+          * every screen; a second button doing the same thing two centimetres
+          * away is not a shortcut, it is a question about which one is different.
+          * The label it carries says what it makes: a top-level note here, a
+          * subnote when you are inside one.
+          */}
+        <PageTitle
+          subtitle={
+            isEmpty
+              ? 'Nothing written yet'
+              : `${pluralize(rootNotes.length, 'note')} at the top level · ${pluralize(visibleNotes.length, 'note')} in all`
+          }
+        >
+          Notes
+        </PageTitle>
       </PageHeader>
 
       {isEmpty ? (
@@ -415,23 +405,17 @@ function NotesView() {
             </Section>
           ) : null}
 
-          <Section title="Recently edited">
-            <ListSurface>
-              {recentNotes.map((note) => (
-                <NoteRow
-                  key={note.id}
-                  note={note}
-                  childCount={childCounts.get(note.id) ?? 0}
-                  linkCount={linkCounts.get(note.id) ?? 0}
-                  onOpen={() => openNote(note.id)}
-                  onShowActions={() => setActiveNote(note)}
-                  onToggleFavorite={() => void useVaultStore.getState().toggleNoteFavorite(note.id)}
-                />
-              ))}
-            </ListSurface>
-          </Section>
-
-          <Section title="All notes" className="pb-6">
+          {/*
+            * One hierarchy, listed once.
+            *
+            * This screen used to show Favorites, then "Recently edited", then
+            * "All notes" — three overlapping lists answering three questions and
+            * making the *one* thing that matters (the shape of the tree) the last
+            * of them. Recency is still one tap away in Search → Recent, which is
+            * where a recency listing belongs; here, what you see is the tree, from
+            * its roots, exactly as Explorer shows a drive.
+            */}
+          <Section title="Top-level notes" className="pb-6">
             {rootNotes.length > 0 ? (
               <ListSurface>
                 {rootNotes.map((note) => (

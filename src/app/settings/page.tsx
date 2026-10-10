@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  Archive,
   ChevronRight,
   Inbox,
   Monitor,
@@ -45,7 +44,7 @@ export default function SettingsPage() {
   // what this session may actually read. A "1,204 links" total that included
   // protected ones would be a number the user cannot reconcile with anything.
   const unavailableCount = useVaultStore(
-    (state) => state.links.filter((link) => link.isUnavailable && !link.isArchived && !state.hidden.links.has(link.id)).length,
+    (state) => state.links.filter((link) => link.isUnavailable && !state.hidden.links.has(link.id)).length,
   );
   const trashCount = useVaultStore((state) => state.trashGroups.length);
   const loadTrash = useVaultStore((state) => state.loadTrash);
@@ -60,9 +59,7 @@ export default function SettingsPage() {
   const readableLinks = links.filter((link) => !hidden.links.has(link.id));
   const readableNotes = notes.filter((note) => !hidden.notes.has(note.id));
   const readableFolders = folders.filter((folder) => !hidden.folders.has(folder.id));
-  const activeLinks = readableLinks.filter((link) => !link.isArchived);
-  const archived = readableLinks.length - activeLinks.length;
-  const withNotes = activeLinks.filter((link) => link.userNote?.trim()).length;
+  const withNotes = readableLinks.filter((link) => link.userNote?.trim()).length;
   /*
    * The erase warning counts *everything*, protected content included.
    *
@@ -71,7 +68,7 @@ export default function SettingsPage() {
    * what is about to be destroyed, and the user is the person who owns all of it.
    */
   const eraseCounts = {
-    links: links.filter((link) => !link.isArchived).length,
+    links: links.length,
     notes: notes.length,
     folders: folders.length,
   };
@@ -128,13 +125,18 @@ export default function SettingsPage() {
 
       <Section title="Your vault">
         <div className="mx-4 overflow-hidden rounded-control border-border bg-surface border">
-          <StatRow label="Saved links" value={pluralize(activeLinks.length, 'link')} />
+          {/*
+            Every row here is a count of what is in the vault, so there is no row
+            for a state that hides things. "Archived" used to be one, and it read
+            as a reassuring label for what was really the answer to "where did my
+            link go" — on a screen nobody opens looking for one.
+          */}
+          <StatRow label="Saved links" value={pluralize(readableLinks.length, 'link')} />
           <StatRow label="Notes" value={pluralize(readableNotes.length, 'note')} />
           <StatRow label="With your own note" value={pluralize(withNotes, 'link')} />
           <StatRow label="Folders" value={pluralize(readableFolders.length, 'folder')} />
           <StatRow label="In the Inbox" value={pluralize(inboxCount, 'link')} />
-          <StatRow label="Marked unavailable" value={pluralize(unavailableCount, 'link')} />
-          <StatRow label="Archived" value={pluralize(archived, 'link')} last />
+          <StatRow label="Marked unavailable" value={pluralize(unavailableCount, 'link')} last />
         </div>
 
         {/*
@@ -152,19 +154,6 @@ export default function SettingsPage() {
               <span className="block text-row font-medium text-fg">Inbox</span>
               <span className="block text-meta text-subtle">
                 {inboxCount === 0 ? 'Nothing waiting to be organized' : `${inboxCount} to file`}
-              </span>
-            </span>
-            <ChevronRight size={17} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />
-          </Link>
-          <Link
-            href="/search?filter=archived"
-            className="tap flex items-center gap-3 rounded-2xl border border-hairline bg-surface px-4 py-3.5 active:bg-surface-2"
-          >
-            <Archive size={18} strokeWidth={1.9} className="shrink-0 text-muted" aria-hidden />
-            <span className="min-w-0 flex-1">
-              <span className="block text-row font-medium text-fg">Archive</span>
-              <span className="block text-meta text-subtle">
-                {archived === 0 ? 'Nothing archived' : `${pluralize(archived, 'thing')} kept out of the way`}
               </span>
             </span>
             <ChevronRight size={17} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />

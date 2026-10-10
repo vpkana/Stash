@@ -183,6 +183,75 @@ class StashDatabase extends Dexie {
         });
       });
 
+    // ---- Version 6: the archive goes away ----------------------------------------
+    // Archiving was a trap, and this version undoes it.
+    //
+    // The old feature set a boolean on a link or note and, from that moment on,
+    // every surface the user had — Home, the Library, the Inbox, a folder, the
+    // default Search filter — filtered the row out. The only way back was one
+    // filter chip, which is not where somebody who has just lost a link looks.
+    // Nothing was ever deleted, which is why this is recoverable at all: the rows
+    // are all still here, with their ids, folders, notes and timestamps.
+    //
+    // So the migration *restores* them. Every row that was archived is archived
+    // no longer, and the app no longer reads the field anywhere. It is kept on the
+    // type and in backups because a file written by an older build carries it and
+    // must still import cleanly; it is simply not a state the app can enter again.
+    //
+    // This reads and rewrites flags only. No row is added, deleted, re-keyed or
+    // re-homed, no index changes, and a row that was never archived is not touched
+    // at all — so the worst case for a vault that never used the feature is a
+    // handful of no-op writes.
+    this.version(6)
+      .stores({
+        folders:
+          'id, parentId, name, sortOrder, updatedAt, deletedAt, [parentId+sortOrder]',
+        links:
+          'id, folderId, normalizedUrl, createdAt, updatedAt, lastOpenedAt, deletedAt, [folderId+createdAt]',
+        tags: 'id, &name',
+        linkTags: '[linkId+tagId], linkId, tagId',
+        notes:
+          'id, parentNoteId, title, sortOrder, createdAt, updatedAt, deletedAt, [parentNoteId+sortOrder]',
+        noteLinks: '[noteId+linkId], noteId, linkId, createdAt',
+        meta: 'key',
+        security: 'key',
+      })
+      .upgrade(async (transaction) => {
+        let linksRestored = 0;
+        let notesRestored = 0;
+
+        await transaction
+          .table<SavedLink, string>('links')
+          .toCollection()
+          .modify((link) => {
+            if (link.isArchived === true) {
+              link.isArchived = false;
+              linksRestored += 1;
+            }
+          });
+
+        await transaction
+          .table<Note, string>('notes')
+          .toCollection()
+          .modify((note) => {
+            if (note.isArchived === true) {
+              note.isArchived = false;
+              notesRestored += 1;
+            }
+          });
+
+        await transaction.table<MetaRow, string>('meta').put({
+          key: META_KEYS.schemaInfo,
+          value: {
+            version: 6,
+            migratedAt: Date.now(),
+            // Recorded so the recovery is auditable after the fact: how many
+            // links and notes this upgrade brought back into view.
+            restoredFromArchive: { links: linksRestored, notes: notesRestored },
+          },
+        });
+      });
+
     // A newer build (or another tab) upgraded the schema: close so the other
     // context can proceed instead of us writing through a stale schema.
     this.on('versionchange', () => {

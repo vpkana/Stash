@@ -202,10 +202,10 @@ describe('delete impact', () => {
     expect(folderDeletionImpact(TREE, links, 'prog')?.newParentId).toBeNull();
   });
 
-  it('ignores archived links when counting what matters', () => {
-    const archived = { ...link('l6', 'tut'), isArchived: true };
-    const impact = folderDeletionImpact(TREE, [...links, archived], 'react');
-    expect(impact?.descendantLinkCount).toBe(1);
+  it('counts a link carrying the legacy archive flag, so a delete warning cannot understate itself', () => {
+    const flagged = { ...link('l6', 'tut'), isArchived: true };
+    const impact = folderDeletionImpact(TREE, [...links, flagged], 'react');
+    expect(impact?.descendantLinkCount).toBe(2);
   });
 
   it('returns null for a folder that does not exist', () => {

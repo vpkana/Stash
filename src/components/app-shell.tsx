@@ -10,6 +10,7 @@ import { CaptureSheet } from './capture/capture-sheet';
 import { LockGate } from './privacy/lock-gate';
 import { Toaster } from './ui/toast';
 import { useCaptureStore } from '@/stores/capture-store';
+import { useEditorStore } from '@/stores/editor-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 
 /**
@@ -30,6 +31,12 @@ function sectionOf(pathname: string): string {
  * the tab bar pinned, makes the gesture bar behave, and means a sheet can take
  * over the screen without the underlying page shifting behind it. This is the
  * primary surface and nothing here is compromised for the desktop one.
+ *
+ * The tab bar is drawn on every screen except two: while an incoming share is
+ * being handled (the capture surface is the whole screen), and while a note is
+ * open. The second one is the keyboard fix — see `stores/editor-store.ts` — and it
+ * is a *removal* rather than a shift, because there is no offset that can be
+ * right when the keyboard height is unknown.
  *
  * **Desktop.** Above `lg` the same shell becomes a row: the rail on the left, the
  * content column on the right, no tab bar. Notice that this is one component with
@@ -66,6 +73,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
    * would only ever be a flash of somebody else's screen behind the fade-in.
    */
   const shareTakeover = captureStatus !== 'idle' && captureMode === 'share';
+  // A note is being written: the writing toolbar owns the bottom of the screen,
+  // and the tab bar would be sitting on the keyboard.
+  const noteOpen = useEditorStore((state) => state.noteOpen);
 
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-bg px-safe pt-safe lg:flex-row lg:px-0 lg:pt-0">
@@ -85,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <PrimaryActionButton variant="floating" />
       </React.Suspense>
 
-      {shareTakeover ? null : <BottomNav />}
+      {shareTakeover || noteOpen ? null : <BottomNav />}
       <CaptureSheet />
       <Toaster />
       {/* Registered once, above every screen: the hardware back button. */}

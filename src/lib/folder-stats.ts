@@ -48,7 +48,7 @@ export function computeFolderStats(
 
   const parentOf = new Map(folders.map((folder) => [folder.id, folder.parentId]));
   for (const link of links) {
-    if (link.isArchived || !link.folderId) continue;
+    if (!link.folderId) continue;
     if (hiddenLinks.has(link.id) || hiddenFolders.has(link.folderId)) continue;
     const own = stats.get(link.folderId);
     if (own) own.directLinks += 1;
