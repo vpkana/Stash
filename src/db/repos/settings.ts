@@ -130,6 +130,10 @@ export async function getPrivacySettings(): Promise<PrivacySettings> {
     lockApp: stored.lockApp !== false,
     secureScreen: stored.secureScreen === true,
     biometric: stored.biometric !== false,
+    // Anything that is not the literal `passcode` is read as the device default:
+    // a row written before this field existed, or a corrupted one, must not be
+    // able to point the gate at a way in the vault does not have.
+    primaryUnlock: stored.primaryUnlock === 'passcode' ? 'passcode' : 'device',
   };
 }
 

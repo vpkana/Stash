@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, FilePlus2, Layers, Lock, MoreHorizontal, NotebookPen, Star } from '@/components/ui/icons';
 import type { Note, SavedLink } from '@/db/types';
-import { pluralize } from '@/lib/format';
+import { displayUrl, pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { noteChildren, noteDescendantIds } from '@/lib/tree';
 import { useLockState } from '@/lib/privacy/access';
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, PageTitle, Section } from '@/components/ui/page';
 import { toast } from '@/components/ui/toast';
 import { NoteEditor } from '@/components/notes/note-editor';
+import type { RichTextApi } from '@/components/notes/rich-text-editor';
 import { NoteRow } from '@/components/notes/note-row';
 import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
 import { NoteResources } from '@/components/notes/note-resources';
@@ -50,6 +51,14 @@ function NotesView() {
   const [activeNote, setActiveNote] = React.useState<Note | null>(null);
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
   const [picking, setPicking] = React.useState(false);
+  /**
+   * The open editor's insertion API.
+   *
+   * Held here because *this* screen is what turns a pick into an attachment and a
+   * subnote into a row; the editor is what knows where the caret was when the user
+   * asked. Neither half can do it alone, so the handle lives in the middle.
+   */
+  const editorApi = React.useRef<RichTextApi | null>(null);
 
   const current = React.useMemo(
     () => (noteId ? notes.find((note) => note.id === noteId) ?? null : null),
@@ -138,6 +147,27 @@ function NotesView() {
     },
     [openNote],
   );
+
+  /**
+   * A subnote made *from the body*.
+   *
+   * Deliberately not the same as the New-note button: this one does not navigate
+   * away. The whole point of the Note button beside the title is that the user is
+   * writing a sentence and wants to point at a new subnote from *here*, so the
+   * reference lands at the caret and the caret stays in the note being written.
+   */
+  const addSubnoteAtCaret = React.useCallback(async (parentId: string) => {
+    const result = await useVaultStore.getState().createNote({
+      title: 'New subnote',
+      content: '',
+      parentNoteId: parentId,
+    });
+    if (!result.ok) {
+      toast(result.message, { tone: 'danger' });
+      return;
+    }
+    editorApi.current?.insertNoteReference(result.note.id, result.note.title);
+  }, []);
 
   const openLink = React.useCallback((link: SavedLink) => {
     void useVaultStore.getState().markLinkOpened(link.id);
@@ -264,8 +294,12 @@ function NotesView() {
             {...(current.isLocked
               ? { onUnlock: () => void useVaultStore.getState().toggleNoteLocked(current.id, false) }
               : {})}
-            onAddSubnote={() => void createNote(current.id)}
+            onAddSubnote={() => void addSubnoteAtCaret(current.id)}
             onAttachLink={() => setPicking(true)}
+            onApiReady={(api) => {
+              editorApi.current = api;
+            }}
+            onOpenReference={openNote}
             subnoteCount={subnotes.length}
             linkCount={resources.length}
             save={async (draft) => {
@@ -274,8 +308,17 @@ function NotesView() {
           />
         )}
 
-        <Section title="Subnotes" className="pt-2">
-          {subnotes.length > 0 ? (
+        {/*
+          * Only when there is something in it.
+          *
+          * "No subnotes yet" is a sentence about the absence of content, printed
+          * under every note that has none — which is most of them, and which the
+          * user already knows. The Note button beside the title is the signpost;
+          * an empty section is just noise between the text and the bottom of the
+          * screen.
+          */}
+        {subnotes.length > 0 ? (
+          <Section title="Subnotes" className="pt-2">
             <ListSurface>
               {subnotes.map((subnote) => (
                 <NoteRow
@@ -289,13 +332,8 @@ function NotesView() {
                 />
               ))}
             </ListSurface>
-          ) : (
-            <p className="px-4 pb-1 text-meta leading-relaxed text-subtle">
-              No subnotes yet. “Subnotes and links” above the text starts one — splitting a large topic into
-              subnotes keeps each one short and findable.
-            </p>
-          )}
-        </Section>
+          </Section>
+        ) : null}
 
         <NoteResources
           links={resources}
@@ -327,9 +365,15 @@ function NotesView() {
           onPick={(link) => {
             setPicking(false);
             void useVaultStore.getState().attachLink(current.id, link.id).then((ok) => {
-              toast(ok ? 'Link attached' : 'Could not attach that link', {
-                tone: ok ? 'success' : 'danger',
-              });
+              if (!ok) {
+                toast('Could not attach that link', { tone: 'danger' });
+                return;
+              }
+              // The reference goes where the caret was when the button was pressed,
+              // not at the end: the picker moved focus, so the editor remembered
+              // the position before it opened.
+              editorApi.current?.insertLink(link.url, link.title?.trim() || displayUrl(link.url));
+              toast('Link attached');
             });
           }}
         />

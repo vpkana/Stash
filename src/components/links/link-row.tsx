@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Link2Off, Lock, MoreHorizontal, Star } from '@/components/ui/icons';
+import { Link2, Link2Off, Lock, MoreHorizontal, Star } from '@/components/ui/icons';
 import type { SavedLink } from '@/db/types';
 import { displayUrl, formatRelative } from '@/lib/format';
 import { linkPrimaryLabel, linkDomain } from '@/lib/link-label';
@@ -101,6 +101,13 @@ export function LinkRow({
   const hasLabel = label.kind !== 'url';
   const domain = linkDomain(link);
   const tone = domainColor(domain ?? label.text);
+  /*
+   * What the tile's glyph is taken from, in order of how well it identifies the
+   * link: where it came from, then what it is called, then whatever text arrived
+   * with it, then the address. Every step exists because the one before it can be
+   * absent — and a tile with no glyph at all is a colour with no meaning.
+   */
+  const tileValue = domain || label.text || link.rawText || link.url;
 
   return (
     <div className={cn('flex items-stretch', highlight && 'bg-accent-soft/40', className)}>
@@ -115,7 +122,11 @@ export function LinkRow({
           always shows the same letter on the same colour, which is what makes it
           readable at a glance instead of something to decode.
         */}
-        <MonogramTile color={tone} value={domain ?? label.text} />
+        <MonogramTile
+          color={tone}
+          value={tileValue}
+          fallback={<Link2 size={18} strokeWidth={2} aria-hidden />}
+        />
 
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">

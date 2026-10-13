@@ -86,11 +86,13 @@ function LibraryView() {
   /*
    * Dragging a folder to reorder it, scoped to the siblings on this screen.
    *
-   * The list handed to the hook is exactly the run of children being rendered,
-   * and that is what keeps a drag inside its own parent: there is no other list
-   * for an index to resolve against, so a folder cannot be dropped into a parent
-   * it was never next to. Moving *between* parents stays where it belongs — in
-   * the folder's own sheet, as an explicit "Move to another folder".
+   * The gesture lives on the row itself: press and hold a folder and it lifts and
+   * follows the pointer. The list handed to the hook is exactly the run of
+   * children being rendered, and that is what keeps a drag inside its own parent:
+   * there is no other list for an index to resolve against, so a folder cannot be
+   * dropped into a parent it was never next to. Moving *between* parents stays
+   * where it belongs — in the folder's own sheet, as an explicit "Move to another
+   * folder".
    *
    * Like every other hook here it runs on every render, above the early return
    * for a locked folder, so the number of hooks never depends on the data.
@@ -432,19 +434,18 @@ function LibraryView() {
           <ListSurface>
             {subfolders.map((folder, index) => {
               const stats = folderStats.get(folder.id);
-              const drag = folderDrag.getRowProps(folder.id, index);
               return (
-                <div key={folder.id} ref={drag.ref} className={drag.className} data-drop-edge={drag['data-drop-edge']}>
-                  <FolderRow
-                    folder={folder}
-                    linkCount={(stats?.directLinks ?? 0) + (stats?.nestedLinks ?? 0)}
-                    childCount={stats?.directChildren ?? 0}
-                    onOpen={() => router.push(`/library?folder=${folder.id}`)}
-                    onShowActions={() => setActiveFolder(folder)}
-                    onToggleFavorite={() => void useVaultStore.getState().toggleFolderFavorite(folder.id)}
-                    dragHandle={folderDrag.getHandleProps(folder.id, index)}
-                  />
-                </div>
+                <FolderRow
+                  key={folder.id}
+                  folder={folder}
+                  linkCount={(stats?.directLinks ?? 0) + (stats?.nestedLinks ?? 0)}
+                  childCount={stats?.directChildren ?? 0}
+                  onOpen={() => router.push(`/library?folder=${folder.id}`)}
+                  onShowActions={() => setActiveFolder(folder)}
+                  onToggleFavorite={() => void useVaultStore.getState().toggleFolderFavorite(folder.id)}
+                  dragRow={folderDrag.getRowProps(folder.id, index)}
+                  consumeDrag={folderDrag.consumeDrag}
+                />
               );
             })}
           </ListSurface>
@@ -456,7 +457,7 @@ function LibraryView() {
            * just clutter.
            */}
           {subfolders.length > 1 ? (
-            <p className="text-meta px-5 pt-2 text-subtle">Drag the grip to reorder.</p>
+            <p className="text-meta px-5 pt-2 text-subtle">Press and hold a folder to drag it into a new order.</p>
           ) : null}
         </Section>
       ) : null}

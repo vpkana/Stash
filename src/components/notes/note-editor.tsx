@@ -14,7 +14,6 @@ import {
   ListOrdered,
   Loader2,
   Lock,
-  MoreHorizontal,
   Quote,
   Strikethrough,
   Unlock,
@@ -46,17 +45,22 @@ import { MarkdownView } from './markdown-view';
  *
  * Writing. The layout says so in the order it puts things in:
  *
- *  1. the title, which is the first thing you type;
+ *  1. the title, with the two things that create *structure* beside it;
  *  2. the body, which is everything;
  *  3. one quiet line of status — autosave, and whether the note is protected;
- *  4. one formatting bar, fixed under the thumb, holding *only* formatting;
- *  5. a `⋯` menu holding everything that is not writing: add a subnote, attach a
- *     saved link, and the note's subnote/link counts.
+ *  4. one formatting bar, fixed under the thumb, holding *only* formatting.
  *
- * The subnote and attach-link actions used to be permanent panels under the body,
- * competing with the text for attention and scrolling away from it. They are the
- * same features in the same place, one tap deeper, and the writing surface is not
- * sharing the screen with them any more.
+ * ## Note and Link, beside the title
+ *
+ * The two buttons next to the title create the two things a note refers to: a
+ * **subnote** and a **saved link**. Both insert what they created *at the caret*,
+ * which is the point of putting them here rather than in a menu below the text —
+ * the user chooses where in the note the reference sits, instead of having it
+ * appended wherever the editor happened to think the end was.
+ *
+ * That placement is why the caret is saved before either button runs: opening the
+ * link picker moves focus out of the body, so the position is captured first and
+ * restored when the insertion happens.
  *
  * There is no Read/Edit toggle either: the body *is* the formatted view while you
  * write it, and the reading view exists where it always mattered — in the rendered
@@ -84,9 +88,20 @@ export interface NoteEditorProps {
    */
   readOnly?: boolean;
   onUnlock?: () => void;
-  /** Secondary actions, offered in the ⋯ menu rather than beside the text. */
+  /**
+   * Create a subnote and insert a reference to it at the caret.
+   *
+   * The editor saves the caret, calls this, and expects the reference to be
+   * inserted by the caller through the API it published — the caller is the one
+   * that knows how to make the note.
+   */
   onAddSubnote?: () => void;
+  /** Open the link picker; the picked link is attached and inserted at the caret. */
   onAttachLink?: () => void;
+  /** Receives the insertion API, so the caller can land things at the caret. */
+  onApiReady?: (api: RichTextApi) => void;
+  /** Follow a subnote reference that was tapped in the body. */
+  onOpenReference?: (noteId: string) => void;
   subnoteCount?: number;
   linkCount?: number;
 }
@@ -98,11 +113,12 @@ export function NoteEditor({
   onUnlock,
   onAddSubnote,
   onAttachLink,
+  onApiReady,
+  onOpenReference,
   subnoteCount = 0,
   linkCount = 0,
 }: NoteEditorProps) {
   const [draft, setDraft] = React.useState<NoteDraft>({ title: note.title, content: note.content });
-  const [menuOpen, setMenuOpen] = React.useState(false);
   const [linkDraft, setLinkDraft] = React.useState<string | null>(null);
 
   const apiRef = React.useRef<RichTextApi | null>(null);
@@ -147,34 +163,81 @@ export function NoteEditor({
     apiRef.current?.insertLink(href);
   }, [linkDraft]);
 
+  /**
+   * Both structure buttons work the same way: remember the caret, save what is
+   * typed, and let the caller put the new thing there.
+   */
+  const createAtCaret = React.useCallback(
+    (action: () => void) => {
+      apiRef.current?.saveSelection();
+      void flush().then(action);
+    },
+    [flush],
+  );
+
   const statusText = autosaveLabel(status);
   const dirty = draft.title !== persisted.title || draft.content !== persisted.content;
-  const hasMenu = Boolean(onAddSubnote || onAttachLink || subnoteCount > 0 || linkCount > 0);
 
   return (
     <div className="flex flex-col">
-      <input
-        ref={titleRef}
-        value={draft.title}
-        onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            void flush();
-            apiRef.current?.focus();
-          }
-        }}
-        placeholder="Title"
-        aria-label="Note title"
-        maxLength={120}
-        autoComplete="off"
-        readOnly={readOnly}
-        enterKeyHint="next"
-        className={cn(
-          'w-full bg-transparent px-4 pt-1 text-display leading-tight font-semibold tracking-tight text-fg',
-          'placeholder:text-subtle focus:outline-none',
-        )}
-      />
+      <div className="flex items-start gap-2 px-4 pt-1">
+        <input
+          ref={titleRef}
+          value={draft.title}
+          onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              void flush();
+              apiRef.current?.focus();
+            }
+          }}
+          placeholder="Title"
+          aria-label="Note title"
+          maxLength={120}
+          autoComplete="off"
+          readOnly={readOnly}
+          enterKeyHint="next"
+          className={cn(
+            'min-w-0 flex-1 bg-transparent pt-1 text-display leading-tight font-semibold tracking-tight text-fg',
+            'placeholder:text-subtle focus:outline-none',
+          )}
+        />
+
+        {/*
+          * The two structure buttons, beside the name rather than in a panel under
+          * the text. Each one writes at the caret, so the reference appears in the
+          * sentence being written instead of at the end of the note.
+          */}
+        {!readOnly ? (
+          <div className="flex shrink-0 items-center gap-1 pt-1.5">
+            {onAddSubnote ? (
+              <button
+                type="button"
+                onClick={() => createAtCaret(() => onAddSubnote())}
+                aria-label="Add a subnote and insert it here"
+                title="Add a subnote here"
+                className="tap tap-scale flex h-9 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-meta font-medium text-muted active:bg-surface-3"
+              >
+                <FilePlus2 size={16} strokeWidth={2} aria-hidden />
+                Note
+              </button>
+            ) : null}
+            {onAttachLink ? (
+              <button
+                type="button"
+                onClick={() => createAtCaret(() => onAttachLink())}
+                aria-label="Attach a saved link and insert it here"
+                title="Attach a link here"
+                className="tap tap-scale flex h-9 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-meta font-medium text-muted active:bg-surface-3"
+              >
+                <Link2 size={16} strokeWidth={2} aria-hidden />
+                Link
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex items-center justify-between gap-2 px-4 pt-1 pb-2">
         <p className="min-w-0 truncate text-meta text-subtle">
@@ -203,63 +266,6 @@ export function NoteEditor({
         </span>
       </div>
 
-      {/*
-        * The secondary actions, behind one button.
-        *
-        * Deliberately a small inline panel rather than a sheet: it holds at most
-        * two choices, and raising a sheet over the note to offer them would be a
-        * bigger interruption than the panels this replaces.
-        */}
-      {!readOnly && hasMenu ? (
-        <div className="relative px-4 pb-1">
-          <button
-            type="button"
-            onClick={() => setMenuOpen((current) => !current)}
-            aria-expanded={menuOpen}
-            aria-label="More writing actions"
-            className="tap flex h-8 items-center gap-1.5 rounded-full bg-surface-2 px-3 text-meta font-medium text-muted active:bg-surface-3"
-          >
-            <MoreHorizontal size={16} strokeWidth={2} aria-hidden />
-            {menuOpen ? 'Close' : 'Subnotes and links'}
-            {!menuOpen && subnoteCount + linkCount > 0 ? (
-              <span className="text-subtle">{subnoteCount + linkCount}</span>
-            ) : null}
-          </button>
-
-          {menuOpen ? (
-            <div className="mt-2 flex flex-col overflow-hidden rounded-xl border border-border bg-surface">
-              {onAddSubnote ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    void flush().then(() => onAddSubnote());
-                  }}
-                  className="tap flex items-center gap-2.5 px-3.5 py-3 text-left text-row font-medium text-fg active:bg-surface-2"
-                >
-                  <FilePlus2 size={17} strokeWidth={1.9} className="shrink-0 text-accent" aria-hidden />
-                  Add a subnote
-                  <span className="text-meta ml-auto text-subtle">starts empty</span>
-                </button>
-              ) : null}
-              {onAttachLink ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    void flush().then(() => onAttachLink());
-                  }}
-                  className="tap flex items-center gap-2.5 border-t border-hairline px-3.5 py-3 text-left text-row font-medium text-fg active:bg-surface-2"
-                >
-                  <Link2 size={17} strokeWidth={1.9} className="shrink-0 text-accent" aria-hidden />
-                  Attach a saved link
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
       {readOnly ? (
         // Reading, not editing: the rendered view, with its interactive
         // checklists. Nothing here shows Markdown source either.
@@ -272,8 +278,10 @@ export function NoteEditor({
           onChange={setContent}
           placeholder="Start writing…"
           className="px-4 pb-6 text-title leading-relaxed text-fg"
+          {...(onOpenReference ? { onOpenReference } : {})}
           onReady={(api) => {
             apiRef.current = api;
+            onApiReady?.(api);
           }}
         />
       )}

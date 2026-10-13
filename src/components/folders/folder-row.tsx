@@ -1,12 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { DotsSixVertical, Lock, MoreHorizontal, Star } from '@/components/ui/icons';
+import { Lock, MoreHorizontal, Star } from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
-import type { DragHandleProps } from '@/hooks/use-drag-sort';
+import type { DragRowProps } from '@/hooks/use-drag-sort';
 import { pluralize } from '@/lib/format';
 import { useFolderAccess } from '@/lib/privacy/access';
-import { useLongPress } from '@/hooks/use-long-press';
 import { useVaultStore } from '@/stores/vault-store';
 import { cn } from '@/lib/utils';
 import { Icon, isIconName } from '@/components/ui/icon';
@@ -35,19 +34,22 @@ import { identityColor } from '@/lib/identity-color';
  * a way around the lock, which is exactly the class of bug this replaced — one
  * screen respecting the lock and another navigating straight past it.
  *
- * ## The three controls on the right, and why they are three
- *
- * They are three separate hit targets because they are three different acts:
+ * ## The two controls on the right, and the gesture on the row
  *
  *  - **the star** toggles favourite, in place, with no navigation and no sheet.
  *    It used to be a menu row, which meant starring a folder cost a tap, a sheet
  *    and a scroll — for the one folder property you can see at a glance;
  *  - **the ⋯ button** opens the sheet: rename, move, lock, delete. Everything
- *    that is *not* a toggle lives there;
- *  - **the grip** starts a drag. It is a handle rather than the whole row because
- *    the row is also a button that opens a folder and part of a list that
- *    scrolls, and a gesture that has to distinguish slow taps from fast flicks
- *    from drags gets all three wrong some of the time.
+ *    that is *not* a toggle lives there, and it is opened by a tap on that
+ *    button and by nothing else;
+ *  - **the row itself drags.** Press and hold a folder and it lifts, dims and
+ *    follows your finger or the cursor to a new position among its siblings (see
+ *    `use-drag-sort.ts`). There is no grip any more: a six-dot handle asked the
+ *    user to find a five-millimetre target to do the one thing the row could do
+ *    itself.
+ *
+ * Both controls opt out of the drag with `data-no-drag`, so a press that starts
+ * on the star or the ⋯ never lifts the row underneath it.
  *
  * There is no chevron. It was a decoration that promised a navigation the row
  * already performs, and the row says so better by being one.
@@ -62,8 +64,16 @@ export interface FolderRowProps {
   onShowActions: () => void;
   /** Omit to render the row without a favourite toggle. */
   onToggleFavorite?: () => void;
-  /** Props and handle from {@link useDragSort}, when this list is reorderable. */
-  dragHandle?: DragHandleProps;
+  /** Row props from {@link useDragSort}, when this list is reorderable. */
+  dragRow?: DragRowProps;
+  /**
+   * The companion to `dragRow`: true once, for the click that ends a lift.
+   *
+   * Passed separately rather than folded into `dragRow` because a function is not
+   * an attribute — spreading it onto the element would put a `consumeDrag`
+   * attribute in the DOM.
+   */
+  consumeDrag?: () => boolean;
   className?: string;
 }
 
@@ -75,7 +85,8 @@ export function FolderRow({
   onOpen,
   onShowActions,
   onToggleFavorite,
-  dragHandle,
+  dragRow,
+  consumeDrag,
   className,
 }: FolderRowProps) {
   // Two different questions, and they are deliberately separate:
@@ -85,9 +96,6 @@ export function FolderRow({
   //  - `access` is about *permission*: may its contents be rendered at all.
   const locked = useVaultStore((state) => state.protection.folders.has(folder.id));
   const access = useFolderAccess(folder.id);
-  // Hold a folder for the same sheet its ⋯ button opens, so every list in the
-  // app answers to the same gesture.
-  const { handlers, consumeLongPress } = useLongPress(onShowActions);
 
   const meta: string[] = [];
   if (linkCount > 0) meta.push(pluralize(linkCount, 'link'));
@@ -98,9 +106,10 @@ export function FolderRow({
   const tone = identityColor(folder.id);
 
   const open = React.useCallback(async () => {
-    if (consumeLongPress()) return;
+    // A press that lifted the row to drag it is not also a tap that opens it.
+    if (consumeDrag?.()) return;
     if (await access.request()) onOpen();
-  }, [access, consumeLongPress, onOpen]);
+  }, [access, consumeDrag, onOpen]);
 
   if (access.locked) {
     return (
@@ -118,17 +127,13 @@ export function FolderRow({
   }
 
   return (
-    <div className={cn('flex items-stretch', className)}>
-      {dragHandle ? (
-        <button type="button" {...dragHandle} className={cn(dragHandle.className, 'ml-1')}>
-          <DotsSixVertical size={18} strokeWidth={2} aria-hidden />
-        </button>
-      ) : null}
-
+    <div
+      {...dragRow}
+      className={cn('flex items-stretch', dragRow?.className, className)}
+    >
       <button
         type="button"
         onClick={() => void open()}
-        {...handlers}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-3 py-3.5 text-left active:bg-surface-2"
       >
         <IdentityTile color={tone}>
@@ -150,6 +155,7 @@ export function FolderRow({
       {onToggleFavorite ? (
         <button
           type="button"
+          data-no-drag
           onClick={onToggleFavorite}
           aria-label={folder.isFavorite ? `Unstar ${folder.name}` : `Star ${folder.name}`}
           aria-pressed={folder.isFavorite}
@@ -172,6 +178,7 @@ export function FolderRow({
 
       <button
         type="button"
+        data-no-drag
         onClick={onShowActions}
         aria-label={`${folder.name} actions`}
         className="tap mr-1 flex w-10 shrink-0 items-center justify-center rounded-full text-muted active:bg-surface-2"

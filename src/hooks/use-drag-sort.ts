@@ -10,25 +10,42 @@ import * as React from 'react';
  * one gesture, one drop indicator and a persisted order. A general drag-and-drop
  * toolkit would bring a sensor system, collision detection, an overlay portal and
  * an animation layer to do that, and each of those is another thing that can
- * disagree with a phone's scroll gesture. A hundred lines that only do this are
- * easier to trust than a dependency that does everything.
+ * disagree with a phone's scroll gesture.
  *
- * Three decisions do the real work:
+ * ## The gesture, and why it is a long press
  *
- *  - **The drag starts from a handle, not the row.** A row is also a button that
- *    opens a folder, and a list is also a scrollable surface on a phone. Making
- *    the whole row draggable means a slow tap opens the wrong folder and a fast
- *    flick moves it instead of scrolling. The handle claims the gesture
- *    explicitly, so nothing else has to guess.
- *  - **The handle alone sets `touch-action: none`.** The scroll container keeps
- *    its normal behaviour everywhere else, so dragging never costs scrolling.
- *  - **Nothing moves in the layout while dragging.** The dragged row is lifted
- *    with a transform and the insertion point is shown with an edge line. Rows
- *    that physically shuffle under the finger are pretty and untestable; a line
- *    that says exactly where the row will land is neither.
+ * The row is *the* drag target: press and hold anywhere on a folder and the whole
+ * row lifts, loses some opacity and follows the finger or the cursor. No grip, no
+ * handle, no separate hit target to find with a thumb.
  *
- * Keyboard parity is part of the same handle: Arrow Up and Arrow Down move a row
- * one slot, so the feature a mouse gets is not a feature only a mouse gets.
+ * The long press is what makes that unambiguous. A row is also a button that
+ * opens a folder and part of a list that scrolls, so the three gestures have to be
+ * told apart before they start:
+ *
+ *  - **a quick press that ends** is a tap, and opens the folder;
+ *  - **a press that moves early** is a scroll (or a drag of the list), so the
+ *    pending lift is cancelled the moment the pointer travels further than the
+ *    touch slop;
+ *  - **a press that is held still for {@link LONG_PRESS_MS}** is a drag: the row
+ *    is lifted, and from that instant the gesture belongs to the list.
+ *
+ * The one thing that cannot be left to CSS is scrolling. Setting `touch-action:
+ * none` on the row would break the list for every other gesture, so instead the
+ * scroll is suppressed *only while a drop is in flight*, by cancelling
+ * `touchmove` — attached imperatively at the moment of the lift, because the
+ * browser reads `touch-action` when the finger goes down and a listener added a
+ * render later could be a listener added after the page already scrolled.
+ *
+ * ## What moves
+ *
+ * **Nothing re-lays-out while dragging.** The lifted row is moved with a
+ * transform and the insertion point is shown with an edge line; the rows
+ * underneath do not shuffle. Rows that physically reorder under the finger are
+ * pretty and untestable, and they also make the drop target ambiguous — a line
+ * that says exactly where the row will land is neither.
+ *
+ * Keyboard parity rides along: Arrow Up and Arrow Down move a focused row one
+ * slot, so the feature a mouse gets is not a feature only a mouse gets.
  */
 
 export interface DragSortState {
@@ -38,14 +55,21 @@ export interface DragSortState {
   overIndex: number | null;
 }
 
-export interface DragHandleProps {
+/** Props for the draggable row, spread onto the row's own root element. */
+export interface DragRowProps {
+  ref: (element: HTMLElement | null) => void;
   onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
-  'aria-label': string;
   'aria-roledescription': string;
+  'data-dragging': boolean;
+  /**
+   * Where the insertion line goes for this row: `top` when the dragged row comes
+   * from below, `bottom` when it comes from above, `none` otherwise.
+   */
+  'data-drop-edge': 'top' | 'bottom' | 'none';
   style: React.CSSProperties;
   className: string;
 }
@@ -55,48 +79,59 @@ export interface UseDragSortOptions {
   ids: readonly string[];
   /**
    * Called with the full new order once a drag ends somewhere else. Omit to make
-   * the list read-only: the handle then only offers the keyboard path.
+   * the list read-only: rows are then plain rows with no drag behaviour at all.
    */
   onReorder?: (next: string[]) => void;
-  /** Word used in the handle's accessible name, e.g. `folder` or `note`. */
+  /** Word used in the accessible description, e.g. `folder` or `note`. */
   noun?: string;
-  /** Accessible name of each row, so the handle can say what it moves. */
+  /** Accessible name of each row, so the row can say what it moves. */
   labelOf: (id: string) => string;
 }
 
 export interface UseDragSortResult {
   state: DragSortState;
-  /** Props for the row wrapper. Registers the element used to hit-test. */
-  getRowProps: (id: string, index: number) => {
-    ref: (element: HTMLElement | null) => void;
-    'data-dragging': boolean;
-    /**
-     * Where the insertion line goes for this row: `top` when the dragged row
-     * comes from below, `bottom` when it comes from above, `none` otherwise.
-     */
-    'data-drop-edge': 'top' | 'bottom' | 'none';
-    style: React.CSSProperties;
-    className: string;
-  };
-  getHandleProps: (id: string, index: number) => DragHandleProps;
+  /** Props for a row. Registers the element used to hit-test and to move. */
+  getRowProps: (id: string, index: number) => DragRowProps;
   /** True while a drag is in flight, so the list can soften the surrounding UI. */
   dragging: boolean;
+  /**
+   * Call from the row's `onClick` and bail out when it returns true.
+   *
+   * True exactly once, for the click that ends a lift: a long press that lifted a
+   * row must not also open the folder it was pressing on.
+   */
+  consumeDrag: () => boolean;
 }
 
-const HANDLE_CLASS =
-  'flex size-8 shrink-0 cursor-grab items-center justify-center rounded-lg text-subtle ' +
-  'active:cursor-grabbing active:bg-surface-3';
+/** Held still for this long and the row lifts. Long enough to not fire on a tap. */
+const LONG_PRESS_MS = 280;
+/** Movement before the lift that means the finger is scrolling, not dragging. */
+const SLOP_PX = 8;
 
 export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragSortOptions): UseDragSortResult {
-  const [state, setState] = React.useState<DragSortState>({ draggingId: null, overIndex: null });
+  const [state, setState] = React.useState<DragSortState & { dy: number }>({
+    draggingId: null,
+    overIndex: null,
+    dy: 0,
+  });
 
   const rows = React.useRef(new Map<string, HTMLElement>());
-  const startY = React.useRef(0);
   const orderRef = React.useRef<readonly string[]>(ids);
+  /** The row a press is *pending* on. Cleared by movement, release or a lift. */
+  const armed = React.useRef<string | null>(null);
+  /** The row whose drag is live. Only ever set by the long-press timer. */
+  const active = React.useRef<string | null>(null);
+  const timer = React.useRef<number | null>(null);
+  const startY = React.useRef(0);
+  const startX = React.useRef(0);
+  /** Swallows the click that follows a lift, exactly once. */
+  const swallow = React.useRef(false);
+  /** The `touchmove` cancel installed for the duration of a drag. */
+  const blockScroll = React.useRef<((event: TouchEvent) => void) | null>(null);
+
   // Synced in an effect rather than assigned during render: a ref written while
   // rendering is a value the commit might never publish. The order is only ever
-  // read from a gesture handler, which by definition runs after the commit, so
-  // the one-frame-old value between render and effect is never observed.
+  // read from a gesture handler, which by definition runs after the commit.
   React.useEffect(() => {
     orderRef.current = ids;
   }, [ids]);
@@ -105,6 +140,29 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
     if (element) rows.current.set(id, element);
     else rows.current.delete(id);
   }, []);
+
+  const clearTimer = React.useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+
+  const releaseScrollBlock = React.useCallback(() => {
+    if (!blockScroll.current) return;
+    document.removeEventListener('touchmove', blockScroll.current);
+    blockScroll.current = null;
+  }, []);
+
+  // A row scrolled out of the list (or a screen unmounted) while a press was
+  // pending must not leave a timer behind to lift something that is gone.
+  React.useEffect(
+    () => () => {
+      clearTimer();
+      releaseScrollBlock();
+    },
+    [clearTimer, releaseScrollBlock],
+  );
 
   /**
    * Which slot the dragged row's live centre is over.
@@ -131,11 +189,17 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
     return Math.max(0, Math.min(order.length - 1, index));
   }, []);
 
+  const consumeDrag = React.useCallback(() => {
+    if (!swallow.current) return false;
+    swallow.current = false;
+    return true;
+  }, []);
+
   const finish = React.useCallback(
     (id: string, overIndex: number) => {
       const order = orderRef.current;
       const from = order.indexOf(id);
-      setState({ draggingId: null, overIndex: null });
+      setState({ draggingId: null, overIndex: null, dy: 0 });
       if (from < 0 || from === overIndex || !onReorder) return;
       const next = order.slice();
       next.splice(from, 1);
@@ -145,81 +209,149 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
     [onReorder],
   );
 
-  const getHandleProps = React.useCallback(
-    (id: string, index: number): DragHandleProps => ({
-      onPointerDown: (event) => {
-        if (!onReorder) return;
-        // Only the primary button, and only from the handle: this is the one
-        // place in the list that claims the gesture.
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        startY.current = event.clientY;
-        setState({ draggingId: id, overIndex: index });
-      },
-      onPointerMove: (event) => {
-        if (state.draggingId !== id) return;
-        const element = rows.current.get(id);
-        const box = element?.getBoundingClientRect();
-        const centre = box ? box.top + box.height / 2 + (event.clientY - startY.current) : event.clientY;
-        setState((current) =>
-          current.draggingId === id ? { ...current, overIndex: slotFor(id, centre) } : current,
-        );
-      },
-      onPointerUp: (event) => {
-        if (state.draggingId !== id) return;
-        try {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        } catch {
-          /* the capture is already gone; nothing to release */
-        }
-        finish(id, state.overIndex ?? index);
-      },
-      onPointerCancel: () => {
-        if (state.draggingId !== id) return;
-        setState({ draggingId: null, overIndex: null });
-      },
-      onKeyDown: (event) => {
-        if (!onReorder) return;
-        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
-        event.preventDefault();
-        const order = orderRef.current;
-        const from = order.indexOf(id);
-        const to = event.key === 'ArrowUp' ? from - 1 : from + 1;
-        if (from < 0 || to < 0 || to >= order.length) return;
-        const next = order.slice();
-        next.splice(from, 1);
-        next.splice(to, 0, id);
-        onReorder(next);
-      },
-      'aria-label': `Reorder ${labelOf(id)}`,
-      'aria-roledescription': `Drag handle, ${noun}`,
-      style: { touchAction: 'none' },
-      className: HANDLE_CLASS,
-    }),
-    [finish, labelOf, noun, onReorder, slotFor, state.draggingId, state.overIndex],
-  );
-
-  const dragging = state.draggingId !== null;
-  const fromIndex = state.draggingId ? ids.indexOf(state.draggingId) : -1;
-
   const getRowProps = React.useCallback(
-    (id: string, index: number) => {
+    (id: string, index: number): DragRowProps => {
       const isDragged = state.draggingId === id;
-      const isTarget = dragging && !isDragged && state.overIndex === index;
+      const isTarget = state.draggingId !== null && !isDragged && state.overIndex === index;
+      const fromIndex = state.draggingId ? ids.indexOf(state.draggingId) : -1;
+
       return {
         ref: (element: HTMLElement | null) => registerRow(id, element),
+
+        onPointerDown: (event) => {
+          if (!onReorder) return;
+          // Primary button only: a right-click is not a drag.
+          if (event.button !== 0) return;
+          // The row's own controls are taps, never drags. They opt out with
+          // `data-no-drag` rather than being guessed at by tag name, because the
+          // row itself is a button too.
+          if ((event.target as HTMLElement).closest('[data-no-drag]')) return;
+
+          startY.current = event.clientY;
+          startX.current = event.clientX;
+          armed.current = id;
+          clearTimer();
+
+          const element = event.currentTarget;
+          const pointerId = event.pointerId;
+          timer.current = window.setTimeout(() => {
+            timer.current = null;
+            if (armed.current !== id) return;
+            // The lift. From here the pointer belongs to the list, so the scroll
+            // has to be stopped before it starts.
+            active.current = id;
+            swallow.current = true;
+            try {
+              element.setPointerCapture(pointerId);
+            } catch {
+              /* no pointer capture available; the move handler still works */
+            }
+            const block = (touch: TouchEvent) => {
+              if (touch.cancelable) touch.preventDefault();
+            };
+            blockScroll.current = block;
+            document.addEventListener('touchmove', block, { passive: false });
+            setState({ draggingId: id, overIndex: index, dy: 0 });
+          }, LONG_PRESS_MS);
+        },
+
+        onPointerMove: (event) => {
+          // Pending: any real movement means this was a scroll or a stray touch.
+          if (armed.current === id && active.current === null) {
+            if (
+              Math.abs(event.clientY - startY.current) > SLOP_PX ||
+              Math.abs(event.clientX - startX.current) > SLOP_PX
+            ) {
+              clearTimer();
+              armed.current = null;
+            }
+            return;
+          }
+          if (active.current !== id) return;
+          if (event.cancelable) event.preventDefault();
+
+          const dy = event.clientY - startY.current;
+          // The lifted row already carries the transform, so its measured centre
+          // *is* the live centre — nothing has to be added back in, and the
+          // measurement stays right however far the pointer travels.
+          const rect = rows.current.get(id)?.getBoundingClientRect();
+          const centre = rect ? rect.top + rect.height / 2 : event.clientY;
+          setState((current) =>
+            current.draggingId === id ? { ...current, dy, overIndex: slotFor(id, centre) } : current,
+          );
+        },
+
+        onPointerUp: (event) => {
+          clearTimer();
+          armed.current = null;
+          if (active.current !== id) return;
+          active.current = null;
+          releaseScrollBlock();
+          try {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          } catch {
+            /* the capture is already gone; nothing to release */
+          }
+          finish(id, state.overIndex ?? index);
+        },
+
+        onPointerCancel: () => {
+          clearTimer();
+          armed.current = null;
+          if (active.current !== id) return;
+          // The browser took the gesture (a scroll started, or the app was
+          // interrupted). Nothing moves: the list is left exactly as it was.
+          active.current = null;
+          releaseScrollBlock();
+          setState({ draggingId: null, overIndex: null, dy: 0 });
+        },
+
+        onKeyDown: (event) => {
+          if (!onReorder) return;
+          if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+          event.preventDefault();
+          const order = orderRef.current;
+          const from = order.indexOf(id);
+          const to = event.key === 'ArrowUp' ? from - 1 : from + 1;
+          if (from < 0 || to < 0 || to >= order.length) return;
+          const next = order.slice();
+          next.splice(from, 1);
+          next.splice(to, 0, id);
+          onReorder(next);
+        },
+
+        'aria-roledescription': `Reorderable ${noun}, ${labelOf(id)}`,
         'data-dragging': isDragged,
         'data-drop-edge': (isTarget ? (fromIndex > index ? 'top' : 'bottom') : 'none') as
           | 'top'
           | 'bottom'
           | 'none',
-        style: {} as React.CSSProperties,
+        style: isDragged
+          ? { transform: `translate3d(0, ${state.dy}px, 0) scale(1.02)`, zIndex: 5 }
+          : ({} as React.CSSProperties),
         className: ['row-drag', isDragged ? 'row-drag-lifted' : ''].filter(Boolean).join(' '),
       };
     },
-    [dragging, fromIndex, registerRow, state.draggingId, state.overIndex],
+    [
+      clearTimer,
+      finish,
+      ids,
+      labelOf,
+      noun,
+      onReorder,
+      registerRow,
+      releaseScrollBlock,
+      slotFor,
+      state.draggingId,
+      state.dy,
+      state.overIndex,
+    ],
   );
 
-  return { state, getRowProps, getHandleProps, dragging };
+  return {
+    state: { draggingId: state.draggingId, overIndex: state.overIndex },
+    getRowProps,
+    dragging: state.draggingId !== null,
+    consumeDrag,
+  };
 }

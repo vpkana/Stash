@@ -8,6 +8,7 @@ import { PrimaryActionButton } from './primary-action';
 import { AndroidBack } from './android-back';
 import { CaptureSheet } from './capture/capture-sheet';
 import { LockGate } from './privacy/lock-gate';
+import { PasscodeOnboarding } from './privacy/passcode-onboarding';
 import { Toaster } from './ui/toast';
 import { useCaptureStore } from '@/stores/capture-store';
 import { useEditorStore } from '@/stores/editor-store';
@@ -102,6 +103,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <AndroidBack />
       {/* Last so it paints over the shell, the sheets and the toasts alike. */}
       <LockGate />
+      {/*
+        * The first-run passcode prompt sits *above* the lock gate: a vault with no
+        * passcode has no boundary to cross, so the gate has nothing to say and
+        * this is the only thing that should be asking anything.
+        */}
+      <PasscodeOnboarding />
     </div>
   );
 }

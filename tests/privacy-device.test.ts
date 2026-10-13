@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { db, openDatabase } from '@/db';
 import { createNote, setNoteLocked } from '@/db/repos/notes';
 import { exportVault } from '@/db/repos/vault';
-import { createStaticAuthenticator, devicePromptName, setDeviceAuthenticator } from '@/lib/privacy/auth';
+import {
+  createStaticAuthenticator,
+  devicePromptName,
+  getDeviceAuthenticator,
+  setDeviceAuthenticator,
+} from '@/lib/privacy/auth';
+import { hasDeviceCredential } from '@/lib/privacy/webauthn';
 import {
   createKeyring,
   createKeyringWithDevice,
@@ -201,6 +207,45 @@ describe('arming the device path on a passcode vault', () => {
     // And unlocking falls back rather than failing twice.
     expect(await unlockWithDevice()).toBeNull();
     expect(await unlockWithPasscode('open sesame 42')).not.toBeNull();
+  });
+});
+
+describe('capability versus enrollment on a desktop', () => {
+  /**
+   * The reported failure, at the layer where it lived.
+   *
+   * On a desktop the device prompt is WebAuthn, so "can this machine prompt?" and
+   * "has Stash enrolled a credential here?" are two different questions. Reading
+   * the second one to decide whether the feature can be *offered* is a deadlock:
+   * the credential is created by arming, and arming is refused while the feature
+   * reads as unavailable. A machine with Windows Hello configured has to answer
+   * "yes, I can prompt" before anything has been enrolled — that is what makes the
+   * settings switch tappable at all.
+   */
+  it('answers yes on a machine that can prompt, with nothing enrolled', async () => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const realWindow = globals.window;
+    const realPublicKeyCredential = globals.PublicKeyCredential;
+
+    // A browser on a desktop with a platform authenticator, and no credential
+    // stored by Stash yet.
+    globals.window = { isSecureContext: true, PublicKeyCredential: function () {} };
+    globals.PublicKeyCredential = {
+      isUserVerifyingPlatformAuthenticatorAvailable: async () => true,
+    };
+    setDeviceAuthenticator(null);
+
+    try {
+      const authenticator = await getDeviceAuthenticator();
+      expect(authenticator.kind).toBe('web');
+      expect(await authenticator.isAvailable()).toBe(true);
+      // Nothing is enrolled, so this is capability alone — which is the point.
+      expect(await hasDeviceCredential()).toBe(false);
+    } finally {
+      globals.window = realWindow;
+      globals.PublicKeyCredential = realPublicKeyCredential;
+      setDeviceAuthenticator(null);
+    }
   });
 });
 

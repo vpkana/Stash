@@ -712,6 +712,79 @@ describe('the passcode as the way in', () => {
     expect((await store().unlock(PASSCODE)).ok).toBe(true);
   });
 
+  /**
+   * The reported failure, in one test.
+   *
+   * "I am not able to enable the use fingerprint / Windows Hello feature." The
+   * switch was disabled because availability was read from the `biometric`
+   * setting it controls — off meant "not available", so it could never be turned
+   * on — and, on a desktop, because availability was read from an enrolled
+   * credential that only arming could create. Capability is a fact about the
+   * machine, and this is that fact being told apart from the state it enables.
+   */
+  it('offers the device prompt on a machine that can prompt, before anything is armed', async () => {
+    setSecureStore(memorySecureStore());
+    setDeviceAuthenticator(createStaticAuthenticator({ ok: true }, { available: true }));
+
+    await usePrivacyStore.getState().createWithPasscode(PASSCODE);
+
+    const after = usePrivacyStore.getState();
+    // Nothing is armed yet — and the switch still has to be offered.
+    expect(after.settings.biometric).toBe(false);
+    expect(after.deviceUnlockReady).toBe(false);
+    expect(after.deviceAuthAvailable).toBe(true);
+
+    const armed = await after.armBiometrics();
+    expect(armed.ok).toBe(true);
+    expect(usePrivacyStore.getState().deviceUnlockReady).toBe(true);
+  });
+
+  it('changes the passcode only with the current one, or the device prompt', async () => {
+    await enablePrivacy(PASSCODE);
+
+    // A wrong current passcode changes nothing, and the old one still works.
+    const refused = await usePrivacyStore.getState().changePasscode('not the one', 'a brand new secret');
+    expect(refused.ok).toBe(false);
+    forgetVaultKey();
+    expect(await unlockWithPasscode(PASSCODE)).not.toBeNull();
+    expect(await unlockWithPasscode('a brand new secret')).toBeNull();
+
+    // The device prompt is the other accepted proof: an owner who has forgotten a
+    // passcode but still has their fingerprint unlocked everything.
+    setSecureStore(memorySecureStore());
+    setDeviceAuthenticator(createStaticAuthenticator({ ok: true }));
+    expect((await usePrivacyStore.getState().armBiometrics()).ok).toBe(true);
+
+    const changed = await usePrivacyStore.getState().changePasscode('', 'a brand new secret');
+    expect(changed.ok).toBe(true);
+    forgetVaultKey();
+    expect(await unlockWithPasscode(PASSCODE)).toBeNull();
+    expect(await unlockWithPasscode('a brand new secret')).not.toBeNull();
+  });
+
+  /**
+   * `authorize` is the gate in front of every irreversible action — erasing the
+   * vault, restoring a backup over it, destroying the lock. It must never answer
+   * `ok` to somebody who has proved nothing.
+   */
+  it('refuses to authorise a destructive action without a proof', async () => {
+    await enablePrivacy(PASSCODE);
+    forgetVaultKey();
+    usePrivacyStore.setState({ unlocked: false });
+
+    const refused = await usePrivacyStore.getState().authorize('', 'Erase your Stash vault');
+    expect(refused.ok).toBe(false);
+    expect(isSessionLocked()).toBe(true);
+
+    const wrong = await usePrivacyStore.getState().authorize('wrong again', 'Erase your Stash vault');
+    expect(wrong.ok).toBe(false);
+    expect(isSessionLocked()).toBe(true);
+
+    const allowed = await usePrivacyStore.getState().authorize(PASSCODE, 'Erase your Stash vault');
+    expect(allowed.ok).toBe(true);
+    expect(isSessionLocked()).toBe(false);
+  });
+
   it('replaces the passcode without touching what is encrypted', async () => {
     await enablePrivacy(PASSCODE);
     const folder = await mustFolder('Private');
@@ -1009,15 +1082,28 @@ describe('schema and settings', () => {
       lockApp: true,
       secureScreen: false,
       biometric: true,
+      // The device prompt is preferred by default *when it is armed*; a vault that
+      // has no device wrap falls back to the passcode regardless of this value.
+      primaryUnlock: 'device',
     });
 
-    await setPrivacySettings({ relockPolicy: '15m', secureScreen: true });
-    expect(await getPrivacySettings()).toMatchObject({ relockPolicy: '15m', secureScreen: true });
+    await setPrivacySettings({ relockPolicy: '15m', secureScreen: true, primaryUnlock: 'passcode' });
+    expect(await getPrivacySettings()).toMatchObject({
+      relockPolicy: '15m',
+      secureScreen: true,
+      primaryUnlock: 'passcode',
+    });
 
     // A corrupted row degrades to the defaults instead of disabling the lock.
     await db.meta.put({ key: 'privacy.settings', value: { relockPolicy: 'nonsense' } });
     const recovered = await getPrivacySettings();
     expect(recovered.relockPolicy).toBe('immediate');
+    expect(recovered.primaryUnlock).toBe('device');
+
+    // A row written before the field existed must not point the gate at a way in
+    // the vault does not have.
+    await db.meta.put({ key: 'privacy.settings', value: { primaryUnlock: 'nonsense' } });
+    expect((await getPrivacySettings()).primaryUnlock).toBe('device');
   });
 
   it('does not leave a keyring behind after the vault is erased', async () => {

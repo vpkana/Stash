@@ -185,8 +185,69 @@ function indentOf(whitespace: string): number {
  * documented limit of this model and keeps the renderer small enough to audit.
  * Code spans win over everything, so backticks protect their contents.
  */
-const INLINE_PATTERN =
-  /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*)|(_[^_\n]+_)|(\[[^\]\n]*\]\([^)\s]+\))|(https?:\/\/[^\s<>"'`)\]]+)/g;
+/**
+ * The endings that make a bare host a link rather than a sentence.
+ *
+ * A domain with no scheme is only autolinked when its last label is a real
+ * top-level domain, which is what keeps "Node.js", "e.g." and "v1.2" out of it
+ * while `google.com` in the middle of a sentence becomes a link — the behaviour
+ * every other notes app has, and the one the user asked for by name.
+ */
+const URL_TLDS = [
+  'com', 'org', 'net', 'io', 'dev', 'app', 'ai', 'co', 'me', 'sh', 'xyz', 'info', 'edu', 'gov',
+  'us', 'uk', 'de', 'fr', 'au', 'ca', 'in', 'to', 'tv', 'gg', 'so', 'rs', 'fm', 'link', 'page',
+  'site', 'blog', 'wiki', 'news', 'tech', 'design', 'art', 'store', 'online', 'cloud', 'pro',
+  'zip', 'run', 'tools', 'codes', 'works', 'studio', 'space', 'team', 'live', 'world', 'zone',
+  'nl', 'se', 'no', 'es', 'it', 'ch', 'at', 'be', 'dk', 'fi', 'pl', 'pt', 'ie', 'nz', 'za',
+];
+
+const TLD_ALTERNATION = URL_TLDS.join('|');
+
+/**
+ * A host with no scheme: `www.example.com`, `google.com`, `example.co.uk/path`.
+ *
+ * The leading guard is what stops it matching inside something else — an email
+ * address (`me@example.com`) and the tail of a longer word are both left as text.
+ */
+const BARE_URL = `(?<![\\w@.])(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.(?:${TLD_ALTERNATION})(?:\\/[^\\s<>"'\u0060)\\]]*)?`;
+
+const SCHEMED_URL = `https?:\\/\\/[^\\s<>"'\u0060)\\]]+`;
+
+const INLINE_PATTERN = new RegExp(
+  [
+    '(`[^`\\n]+`)',
+    '(\\*\\*[^*\\n]+\\*\\*)',
+    '(__[^_\\n]+__)',
+    '(~~[^~\\n]+~~)',
+    '(\\*[^*\\n]+\\*)',
+    '(_[^_\\n]+_)',
+    '(\\[[^\\]\\n]*\\]\\([^)\\s]+\\))',
+    `(${SCHEMED_URL})`,
+    `(${BARE_URL})`,
+  ].join('|'),
+  'gi',
+);
+
+const TRAILING_URL = new RegExp(`(${SCHEMED_URL}|${BARE_URL})\\s*$`, 'i');
+
+/**
+ * The URL that ends `text`, if it ends with one.
+ *
+ * Used by the editor to turn a link into a link *as it is typed*, and exported
+ * separately from {@link renderInline} so the two agree: a string that renders as
+ * a link is a string that is autolinked while writing it, and vice versa.
+ */
+export function trailingUrl(text: string): { text: string; start: number; href: string } | null {
+  const match = TRAILING_URL.exec(text);
+  if (!match) return null;
+  const raw = (match[1] ?? '').trim();
+  if (raw.length === 0) return null;
+  return {
+    text: raw,
+    start: match.index,
+    href: /^https?:/i.test(raw) ? raw : `https://${raw}`,
+  };
+}
 
 export function renderInline(text: string): InlineNode[] {
   const nodes: InlineNode[] = [];
@@ -226,6 +287,13 @@ function classifyInline(token: string): InlineNode | null {
 
   if (/^https?:\/\//.test(token)) {
     return { type: 'link', value: token.replace(/^https?:\/\/(www\.)?/, ''), href: token };
+  }
+
+  // A bare host, which is a link because the last label is a real top-level
+  // domain. The scheme is supplied rather than shown, so the text keeps the
+  // words the user actually wrote.
+  if (/\./.test(token) && token.length > 3) {
+    return { type: 'link', value: token.replace(/^www\./, ''), href: `https://${token}` };
   }
 
   return null;

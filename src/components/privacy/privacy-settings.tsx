@@ -24,6 +24,7 @@ import { Section } from '@/components/ui/page';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { PasscodeInput } from './passcode-input';
+import { ConfirmAuth } from './confirm-auth';
 
 /**
  * Privacy settings.
@@ -84,6 +85,15 @@ export function PrivacySettings() {
   const [confirm, setConfirm] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [opening, setOpening] = React.useState(false);
+  /**
+   * Whether the "change the passcode" form has been authorised yet.
+   *
+   * The proof comes first and it is the *same* proof either way — the passcode
+   * they have now, or the device prompt. Only then does the new passcode appear,
+   * which is what makes this a change rather than a silent replacement anyone
+   * holding an unlocked phone could make.
+   */
+  const [passcodeAuthorised, setPasscodeAuthorised] = React.useState(false);
 
   /**
    * Whether this build can actually block a screenshot.
@@ -124,6 +134,7 @@ export function PrivacySettings() {
     setPasscode('');
     setConfirm('');
     setError(null);
+    setPasscodeAuthorised(false);
   };
 
   const mismatch = confirm.length > 0 && passcode !== confirm;
@@ -335,51 +346,68 @@ export function PrivacySettings() {
 
           {mode === 'setup' || mode === 'passcode' ? (
             <div className="flex flex-col gap-3 border-t border-border px-3 py-3">
-              <p className="px-0.5 text-meta leading-relaxed text-subtle">
-                {mode === 'setup'
-                  ? `At least ${MIN_PASSCODE_LENGTH} characters. Stash does not store this passcode and cannot show it to you later; if you forget it, the device prompt (once armed) is the remaining way in.`
-                  : 'The new passcode replaces the old one. Your folders, notes and links are untouched — the same key is simply wrapped in a new one.'}
-              </p>
-              <PasscodeInput
-                id="stash-passcode-new"
-                label="Passcode"
-                value={passcode}
-                onChange={(value) => {
-                  setPasscode(value);
-                  setError(null);
-                }}
-                onSubmit={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
-                autoFocus
-                disabled={busy}
-                {...(error ? { tone: 'danger' as const, hint: error } : {})}
-              />
-              <PasscodeInput
-                id="stash-passcode-confirm"
-                label="Repeat passcode"
-                value={confirm}
-                onChange={(value) => {
-                  setConfirm(value);
-                  setError(null);
-                }}
-                onSubmit={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
-                disabled={busy}
-                {...(mismatch
-                  ? { tone: 'danger' as const, hint: 'Those two passcodes are not the same.' }
-                  : {})}
-              />
-              <div className="flex gap-2">
-                <Button variant="ghost" className="flex-1" onClick={reset} disabled={busy}>
-                  Cancel
-                </Button>
-                <Button
-                  variant="primary"
-                  className="flex-[1.4]"
-                  disabled={busy || passcode.length < MIN_PASSCODE_LENGTH || mismatch}
-                  onClick={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
-                >
-                  {mode === 'setup' ? 'Turn on locking' : 'Save passcode'}
-                </Button>
-              </div>
+              {mode === 'passcode' && !passcodeAuthorised ? (
+                <>
+                  <p className="px-0.5 text-meta leading-relaxed text-subtle">
+                    Prove it is you first — with the passcode you use now, or with the device prompt — and then you
+                    can choose a new one. Your folders, notes and links are untouched either way.
+                  </p>
+                  <ConfirmAuth
+                    reason="Change the passcode for your Stash vault"
+                    confirmLabel="Continue"
+                    onAuthorized={() => setPasscodeAuthorised(true)}
+                    onCancel={reset}
+                  />
+                </>
+              ) : (
+                <>
+                  <p className="px-0.5 text-meta leading-relaxed text-subtle">
+                    {mode === 'setup'
+                      ? `At least ${MIN_PASSCODE_LENGTH} characters. Stash does not store this passcode and cannot show it to you later; if you forget it, the device prompt (once armed) is the remaining way in.`
+                      : 'The new passcode replaces the old one. Your folders, notes and links are untouched — the same key is simply wrapped in a new one.'}
+                  </p>
+                  <PasscodeInput
+                    id="stash-passcode-new"
+                    label="New passcode"
+                    value={passcode}
+                    onChange={(value) => {
+                      setPasscode(value);
+                      setError(null);
+                    }}
+                    onSubmit={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
+                    autoFocus
+                    disabled={busy}
+                    {...(error ? { tone: 'danger' as const, hint: error } : {})}
+                  />
+                  <PasscodeInput
+                    id="stash-passcode-confirm"
+                    label="Repeat passcode"
+                    value={confirm}
+                    onChange={(value) => {
+                      setConfirm(value);
+                      setError(null);
+                    }}
+                    onSubmit={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
+                    disabled={busy}
+                    {...(mismatch
+                      ? { tone: 'danger' as const, hint: 'Those two passcodes are not the same.' }
+                      : {})}
+                  />
+                  <div className="flex gap-2">
+                    <Button variant="ghost" className="flex-1" onClick={reset} disabled={busy}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="primary"
+                      className="flex-[1.4]"
+                      disabled={busy || passcode.length < MIN_PASSCODE_LENGTH || mismatch}
+                      onClick={() => void (mode === 'setup' ? submitSetup() : submitPasscode())}
+                    >
+                      {mode === 'setup' ? 'Turn on locking' : 'Save passcode'}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
           ) : null}
 
@@ -586,7 +614,10 @@ export function PrivacySettings() {
             </div>
             <p className="px-5 pt-2 text-meta leading-relaxed text-subtle">
               Both ways in unwrap the same key, and either one opens a locked folder on its own. Turning this off
-              removes only the device wrap — it never changes, weakens or removes your passcode.
+              removes only the device wrap — it never changes, weakens or removes your passcode.{' '}
+              {devicePath
+                ? ` Locked folders currently ask for ${settings.primaryUnlock === 'passcode' ? 'your passcode' : 'this'} first; the unlock dialog has a dropdown to switch, and it remembers what you pick.`
+                : ''}
             </p>
           </Section>
 
@@ -635,29 +666,28 @@ export function PrivacySettings() {
                 rather have an empty lock than a lock you cannot open.
               </p>
               {mode === 'abandon' ? (
-                <div className="mt-3 flex flex-col gap-2">
-                  <p className="text-meta leading-relaxed text-danger">
-                    Removing the lock destroys the key. Every locked note, link and folder becomes permanently
-                    unreadable and cannot be recovered on any device.
-                  </p>
-                  <Button
-                    variant="danger"
-                    className="w-full"
-                    onClick={() => {
-                      void abandonLock();
+                <div className="mt-3">
+                  <ConfirmAuth
+                    reason="Destroy the lock on your Stash vault"
+                    confirmLabel="Remove the lock permanently"
+                    tone="danger"
+                    hint={
+                      <>
+                        Removing the lock destroys the key. Every locked note, link and folder becomes permanently
+                        unreadable and cannot be recovered on any device. Your other content is untouched.
+                      </>
+                    }
+                    onAuthorized={async () => {
+                      await abandonLock();
                       reset();
                       toast('Lock removed. Locked items are now unreadable.', { tone: 'danger' });
                     }}
-                  >
-                    Remove the lock permanently
-                  </Button>
-                  <Button variant="ghost" className="w-full" onClick={reset}>
-                    Keep my lock
-                  </Button>
+                    onCancel={reset}
+                  />
                 </div>
               ) : (
                 <Button variant="surface" className="mt-3 w-full" onClick={() => setMode('abandon')}>
-                  Remove the lock without unlocking
+                  Remove the lock
                 </Button>
               )}
             </div>

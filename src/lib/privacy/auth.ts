@@ -61,17 +61,27 @@ export interface DeviceAuthenticator {
 /**
  * Browsers, and the desktop builds that are one.
  *
- * Availability means "this machine could prompt *and* Stash has enrolled a
- * credential here": a Windows PC with Windows Hello configured answers yes, a
- * Linux box with no authenticator answers no, and an enrolled laptop answers yes
- * on the next launch without re-enrolling.
+ * **Availability is a capability question, not a state question.** It asks
+ * "could this machine raise a platform prompt?" — Windows Hello configured, a
+ * PIN set, a Mac with Touch ID — and deliberately says nothing about whether
+ * Stash has already enrolled a credential.
+ *
+ * That distinction is the fix for a real deadlock: this used to require an
+ * enrolled credential, and the credential is only created by *arming* the
+ * feature, which the settings switch refuses to do while availability is false.
+ * The switch was therefore permanently disabled on a machine that could prompt
+ * perfectly well, and the only way to arm it was to arm it. Asking the
+ * platform — {@link import('./webauthn').isDevicePromptSupported} — instead of
+ * asking our own keyring breaks the loop: the switch becomes tappable, arming
+ * enrols the credential, and `isDeviceUnlockReady()` is what reports the armed
+ * state afterwards.
  */
 const WEB_AUTHENTICATOR: DeviceAuthenticator = {
   kind: 'web',
   isAvailable: async () => {
     try {
-      const { hasDeviceCredential, isDevicePromptSupported } = await import('./webauthn');
-      return (await isDevicePromptSupported()) && (await hasDeviceCredential());
+      const { isDevicePromptSupported } = await import('./webauthn');
+      return await isDevicePromptSupported();
     } catch {
       return false;
     }

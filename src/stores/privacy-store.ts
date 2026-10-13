@@ -170,6 +170,29 @@ export interface PrivacyState {
   /** Add or replace the passcode wrap. Requires an unlocked session. */
   setPasscode: (passcode: string) => Promise<ActionResult>;
   /**
+   * Prove that the person at the device may act, before anything irreversible.
+   *
+   * One function, because there is one question — "is this the owner?" — and two
+   * ways to answer it. The device prompt is tried first when it is armed (nothing
+   * to type), and a typed passcode answers it otherwise. A *cancelled* prompt is
+   * deliberately not the end of the attempt: it falls through to the passcode
+   * field, because a stray tap on the system dialog must not be the last word.
+   *
+   * `passcode` may be empty when the caller knows the device path will answer; a
+   * vault with no passcode wrap simply has nothing for it to check.
+   */
+  authorize: (passcode: string, reason: string) => Promise<ActionResult>;
+  /**
+   * Replace the passcode, having proved the current way in first.
+   *
+   * The old passcode is **not** the only accepted proof: a successful device
+   * prompt does just as well, which is what makes "change my passcode" possible
+   * on a phone whose passcode was long forgotten but whose fingerprint still
+   * works. Either way the vault key is what is re-wrapped, so nothing already
+   * encrypted changes and no data is at risk at any point.
+   */
+  changePasscode: (current: string, next: string) => Promise<ActionResult>;
+  /**
    * Remove the passcode wrap, having proved the current passcode first.
    *
    * Refuses when the device prompt is not armed, because a keyring with no wrap
@@ -183,10 +206,11 @@ export interface PrivacyState {
    */
   disable: (passcode: string) => Promise<ActionResult>;
   /**
-   * Open a vault with a passcode. Kept for vaults created before the device lock
-   * existed: their passcode wrap is the only thing that can open them, and
-   * removing this path would destroy access to content that is otherwise
-   * unrecoverable. Nothing in the app creates a passcode any more.
+   * Open a vault with a passcode.
+   *
+   * The passcode is the primary way in — the one wrap the operating system
+   * cannot withdraw — and this is also the path a vault created by an earlier
+   * build uses, where the passcode wrap is the only thing that can open it.
    */
   unlock: (passcode: string) => Promise<ActionResult>;
   /**
@@ -238,10 +262,13 @@ export interface PrivacyState {
   /** Returns true when the policy expired the session on the way back in. */
   handleForeground: (now?: number) => boolean;
   /**
-   * Remove the lock without unlocking: the keyring is destroyed and anything
-   * sealed stays sealed and permanently unreadable. Offered only as a described,
-   * deliberate last resort, so a device whose key is gone cannot leave the app
-   * unusable.
+   * Destroy the keyring without unsealing anything.
+   *
+   * The keyring is deleted and anything sealed stays sealed and permanently
+   * unreadable — this is a *loss*, not a bypass, and it never reveals a locked
+   * item. It is offered only as a described, deliberate last resort, and the
+   * caller must have authorised it first: destroying the lock is a change to the
+   * vault, and no change to the vault is a single unauthenticated tap.
    */
   abandonLock: () => Promise<void>;
   armBiometrics: () => Promise<ActionResult>;
@@ -307,7 +334,11 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     }
 
     const authenticator = await getDeviceAuthenticator();
-    const deviceAuthAvailable = settings.biometric ? await authenticator.isAvailable() : false;
+    // A capability, not a setting: "this machine could prompt" decides whether
+    // the switch can be offered at all. Reading the `biometric` setting here made
+    // the switch depend on itself — off meant "not available", so it could never
+    // be turned on.
+    const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
     const [passcodeSet, deviceStoreKind] = await describeDevicePath(keyring);
 
@@ -344,7 +375,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
 
     const [settings, keyring] = await Promise.all([getPrivacySettings(), hasKeyring()]);
     const authenticator = await getDeviceAuthenticator();
-    const deviceAuthAvailable = settings.biometric ? await authenticator.isAvailable() : false;
+    const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
     const [passcodeSet, deviceStoreKind] = await describeDevicePath(keyring);
 
@@ -390,9 +421,8 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   },
 
   refreshCapabilities: async () => {
-    const settings = get().settings;
     const authenticator = await getDeviceAuthenticator();
-    const deviceAuthAvailable = settings.biometric ? await authenticator.isAvailable() : false;
+    const deviceAuthAvailable = await authenticator.isAvailable();
     const [passcodeSet, deviceStoreKind] = await describeDevicePath(get().keyringPresent);
     set({ deviceAuthAvailable, deviceUnlockReady: await isDeviceUnlockReady(), passcodeSet, deviceStoreKind });
   },
@@ -422,6 +452,11 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       message: null,
     });
     syncScreenPrivacy(settings.secureScreen, true);
+    // Re-read the device capabilities now that a keyring exists: whether this
+    // machine can prompt is a fact about the machine, and the settings screen has
+    // to be able to offer the switch the moment locking is on — not one reload
+    // later.
+    await get().refreshCapabilities();
     return { ok: true };
   },
 
@@ -546,6 +581,63 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     if (opened) get().grant(opened);
     syncScreenPrivacy(settings.secureScreen, true);
     await get().reconcile();
+    return { ok: true };
+  },
+
+  authorize: async (passcode, reason) => {
+    set({ busy: true, message: null });
+
+    // 1. The device prompt, when this device has one armed and working. A
+    //    cancelled prompt is *not* an error: the passcode field is still there,
+    //    and the caller may still answer with it.
+    if (await isDeviceUnlockReady()) {
+      const authenticator = await getDeviceAuthenticator();
+      const outcome = await authenticator.authenticate(reason);
+      if (outcome.ok) {
+        const key = await unlockWithDevice();
+        if (key) {
+          set({
+            busy: false,
+            unlocked: true,
+            unlockedAt: Date.now(),
+            backgroundedAt: null,
+            message: null,
+          });
+          await get().reconcile();
+          return { ok: true };
+        }
+      }
+    }
+
+    // 2. The passcode, if this vault has one.
+    if (!(await hasPasscodeWrap())) {
+      const message = await isDeviceUnlockReady()
+        ? 'That did not succeed. Try the device prompt again.'
+        : 'This vault can only be opened with the device prompt, and it is not available here.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+    return get().unlock(passcode);
+  },
+
+  changePasscode: async (current, next) => {
+    if (next.length < MIN_PASSCODE_LENGTH) {
+      return { ok: false, message: MIN_PASSCODE_MESSAGE };
+    }
+
+    // Proving it is you comes first, and it is the same proof whichever way in
+    // this vault has: the old passcode, or the device prompt. A "change" that
+    // skipped this would be a way for someone holding an unlocked phone to set a
+    // passcode the owner does not know.
+    const verified = await get().authorize(current, 'Change the passcode for your Stash vault');
+    if (!verified.ok) {
+      return { ok: false, message: verified.message ?? 'That did not match.' };
+    }
+
+    const result = await setPasscodeWrap(next);
+    if (!result.ok) return { ok: false, message: result.message };
+    const [passcodeSet, deviceStoreKind] = await describeDevicePath(true);
+    set({ passcodeSet, deviceStoreKind, message: null });
     return { ok: true };
   },
 

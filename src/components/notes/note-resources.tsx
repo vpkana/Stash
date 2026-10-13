@@ -18,11 +18,14 @@ import { cn } from '@/lib/utils';
  * of its domain: six different hues that distinguished nothing, made a short
  * list look decorative, and clashed with the accent's meaning elsewhere.
  *
- * There is no "Attach a saved link" button here any more. Attaching is a
- * *command* and this is a *list*, so the command moved up into the note's
- * secondary actions (see `note-editor.tsx`) where it stops competing with the
- * text being written. The list stays, because what a note refers to is part of
- * reading it.
+ * There is no "Attach a saved link" button here. Attaching is a *command*, and
+ * the command is the **Link** button beside the note's title (see
+ * `note-editor.tsx`), where it inserts the reference at the caret.
+ *
+ * The list is rendered **only when it has something in it**. An empty "No links
+ * attached" paragraph under a note that refers to no links is a sentence about
+ * nothing, repeated on every note — and the button above the text is what tells
+ * the user the feature exists.
  */
 
 export interface NoteResourcesProps {
@@ -41,19 +44,21 @@ export function NoteResources({
   readOnly = false,
   className,
 }: NoteResourcesProps) {
+  if (links.length === 0) return null;
+
   return (
     <section className={cn('mt-6', className)}>
       <div className="flex items-baseline justify-between px-4 pb-1.5">
         <h2 className="flex items-center gap-1.5 text-label font-medium text-subtle">
           <Link2 size={12} strokeWidth={2.2} aria-hidden />
           Resources
-          {links.length > 0 ? <span className="text-subtle/70">{links.length}</span> : null}
+          <span className="text-subtle/70">{links.length}</span>
         </h2>
       </div>
 
-      {links.length > 0 ? (
-        <ul className="flex flex-col divide-y divide-hairline">
-          {links.map((link) => (
+      <ul className="flex flex-col divide-y divide-hairline">
+        {
+          links.map((link) => (
             <li key={link.id} className="flex items-stretch">
               <button
                 type="button"
@@ -80,14 +85,9 @@ export function NoteResources({
                 </button>
               )}
             </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="px-4 pb-1 text-meta leading-relaxed text-subtle">
-          No links attached. Use “Subnotes and links” above the text to attach the source of a thought to this
-          note.
-        </p>
-      )}
+          ))
+        }
+      </ul>
     </section>
   );
 }

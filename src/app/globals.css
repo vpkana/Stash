@@ -537,23 +537,54 @@
 /*
  * Dragging a row to reorder it.
  *
- * The dragged row dims rather than following the pointer. Following the pointer
- * means a transform on the row plus a placeholder in the flow, and with variable
- * row heights that placeholder has to be measured on every move — a lot of
- * machinery to answer a question the drop line already answers precisely. What
- * the user needs to know is *where it will land*, and that is the line.
+ * The dragged row follows the pointer (a transform written by the hook) and dims
+ * as it lifts, and the *drop position* is shown with the line further down rather
+ * than by shuffling the rows underneath. Two different answers to two different
+ * questions: "where is the thing I am holding", which has to move, and "where
+ * will it land", which has to be exact. Nothing in the flow re-lays-out, so no
+ * row heights have to be measured on every move.
  *
  * The line is drawn from the row's own data attribute, so the dragging state and
  * the visual are decided in one place (the hook) and rendered in another (here)
  * without a class name to keep in sync.
  */
+/*
+ * A draggable row.
+ *
+ * The transition is what makes the gesture feel like an object rather than a
+ * repaint: opacity eases while the row is dimming as it lifts, and transform
+ * eases only on the way *back* — a transform transition while the pointer is
+ * driving the row would lag the finger by exactly the transition's duration,
+ * which is the whole difference between dragging something and dragging a
+ * ghost of it. `data-dragging` cuts that transition out for the duration.
+ */
 .row-drag {
   position: relative;
-  transition: opacity 140ms ease-out;
+  transition:
+    opacity 140ms ease-out,
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 140ms ease-out;
+}
+
+.row-drag[data-dragging='true'] {
+  transition: none;
+  /* Hinted so the compositor keeps the moving row on its own layer. */
+  will-change: transform;
 }
 
 .row-drag-lifted {
-  opacity: 0.4;
+  opacity: 0.55;
+  border-radius: 0.875rem;
+  background-color: var(--surface);
+  box-shadow:
+    0 1px 0 0 rgb(0 0 0 / 0.04),
+    0 12px 26px -10px rgb(15 18 40 / 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-drag {
+    transition: opacity 140ms ease-out;
+  }
 }
 
 .row-drag[data-drop-edge='top']::before,

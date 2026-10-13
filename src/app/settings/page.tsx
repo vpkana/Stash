@@ -14,11 +14,13 @@ import {
 } from '@/components/ui/icons';
 import { RotateCcw } from '@/components/ui/icons';
 import { PrivacySettings } from '@/components/privacy/privacy-settings';
+import { ConfirmAuth } from '@/components/privacy/confirm-auth';
 import { ExportPanel } from '@/components/backup/export-panel';
 import { ImportFlow } from '@/components/backup/import-flow';
 import { pluralize } from '@/lib/format';
 import { useVaultStore } from '@/stores/vault-store';
 import { useBackupStore } from '@/stores/backup-store';
+import { usePrivacyStore } from '@/stores/privacy-store';
 import { useThemeStore, type ThemeMode } from '@/stores/theme-store';
 import { Button } from '@/components/ui/button';
 import { LogoTile } from '@/components/ui/logo';
@@ -54,6 +56,14 @@ export default function SettingsPage() {
 
   const [busy, setBusy] = React.useState(false);
   const [confirmErase, setConfirmErase] = React.useState(false);
+  /*
+   * Both irreversible entries below are behind a proof of identity before the
+   * act, not after it. The acknowledgement switch and the file picker are about
+   * *intent*; a passcode or a device prompt is about *authorisation*, and only
+   * one of those can stop somebody else holding an unlocked phone.
+   */
+  const [eraseAuthorising, setEraseAuthorising] = React.useState(false);
+  const [importAuthorising, setImportAuthorising] = React.useState(false);
   const beginImport = useBackupStore((state) => state.beginImport);
 
   const readableLinks = links.filter((link) => !hidden.links.has(link.id));
@@ -83,9 +93,16 @@ export default function SettingsPage() {
     setBusy(true);
     const { eraseVault } = await import('@/db/repos/vault');
     await eraseVault();
+    // The privacy session is rebuilt, not just the vault: the erasure removed the
+    // keyring and the device key with everything else, so a session still holding
+    // the old vault key would be claiming a lock that no longer exists — and the
+    // user would be left on a screen that says "Locked" over an empty vault,
+    // instead of being asked to set a passcode for the new one.
+    await usePrivacyStore.getState().reload();
     await refresh();
     setBusy(false);
     setConfirmErase(false);
+    setEraseAuthorising(false);
     toast('Vault erased', { tone: 'success' });
   };
 
@@ -185,10 +202,31 @@ export default function SettingsPage() {
         <ExportPanel />
 
         <div className="mx-4 mt-4 flex flex-col gap-2">
-          <Button variant="surface" className="justify-start" onClick={() => void beginImport()}>
-            <Upload size={18} strokeWidth={1.9} aria-hidden />
-            Restore from a backup
-          </Button>
+          {importAuthorising ? (
+            <div className="rounded-2xl border border-border bg-surface p-4">
+              <p className="text-row font-medium text-fg">Confirm it is you</p>
+              <ConfirmAuth
+                reason="Restore a backup into your Stash vault"
+                confirmLabel="Choose a backup file"
+                onAuthorized={() => {
+                  setImportAuthorising(false);
+                  void beginImport();
+                }}
+                onCancel={() => setImportAuthorising(false)}
+                hint={
+                  <>
+                    Restoring writes into this vault, so it asks first. <span className="font-medium text-fg">Exporting
+                    never asks</span> — taking your own data out is always available.
+                  </>
+                }
+              />
+            </div>
+          ) : (
+            <Button variant="surface" className="justify-start" onClick={() => setImportAuthorising(true)}>
+              <Upload size={18} strokeWidth={1.9} aria-hidden />
+              Restore from a backup
+            </Button>
+          )}
           <p className="px-1 text-meta leading-relaxed text-subtle">
             Opens the system file picker. The file is checked completely — format, version, structure and every
             reference — before anything in your vault is touched, and you are shown what a restore would change
@@ -218,15 +256,27 @@ export default function SettingsPage() {
               aria-label="Confirm permanent erase"
             />
           </div>
-          <Button
-            variant="danger"
-            className="mt-3 w-full"
-            disabled={!confirmErase || busy}
-            onClick={() => void handleErase()}
-          >
-            <Trash2 size={18} strokeWidth={2.1} aria-hidden />
-            Erase vault
-          </Button>
+          {eraseAuthorising ? (
+            <ConfirmAuth
+              reason="Erase your Stash vault"
+              confirmLabel="Erase vault"
+              tone="danger"
+              disabled={!confirmErase}
+              onAuthorized={handleErase}
+              onCancel={() => setEraseAuthorising(false)}
+              hint="Enter your passcode, or confirm with the device prompt, to erase everything on this device."
+            />
+          ) : (
+            <Button
+              variant="danger"
+              className="mt-3 w-full"
+              disabled={!confirmErase || busy}
+              onClick={() => setEraseAuthorising(true)}
+            >
+              <Trash2 size={18} strokeWidth={2.1} aria-hidden />
+              Erase vault
+            </Button>
+          )}
         </div>
       </Section>
 

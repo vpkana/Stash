@@ -156,6 +156,22 @@ export interface DomNodeLike {
 
 const TEXT_NODE = 3;
 
+/**
+ * Invisible characters the *editor* needs but the *note* must not keep.
+ *
+ * `U+200B` is inserted inside an empty formatting wrapper so the caret has
+ * somewhere to sit when the user presses Bold on nothing and starts typing (see
+ * {@link applyTypingStyle}); a caret cannot be placed in a truly empty element in
+ * every engine. It is stripped here rather than never inserted, because the
+ * alternative — a bold toggle that silently does nothing — is the bug this
+ * exists to fix, and `String.prototype.trim` does not remove it.
+ */
+const CARET_CARRIER = /\u200b/g;
+
+function cleanText(value: string): string {
+  return value.replace(CARET_CARRIER, '');
+}
+
 function tagOf(node: DomNodeLike): string {
   return (node.nodeName ?? '').toUpperCase();
 }
@@ -174,7 +190,7 @@ function inlineOf(node: DomNodeLike): string {
 }
 
 function serialiseInline(node: DomNodeLike): string {
-  if (node.nodeType === TEXT_NODE) return node.textContent ?? '';
+  if (node.nodeType === TEXT_NODE) return cleanText(node.textContent ?? '');
 
   switch (tagOf(node)) {
     case 'BR':
@@ -194,9 +210,12 @@ function serialiseInline(node: DomNodeLike): string {
     case 'A': {
       const href = attr(node, 'href') ?? '';
       const label = inlineOf(node);
-      // Only web links survive. A `javascript:` or `data:` href — which would only
-      // be there because something pasted it — becomes plain text.
-      if (!/^https?:\/\//i.test(href)) return label;
+      // Two kinds of link survive: web links, and Stash's own in-note references.
+      // A reference is `#note=<id>` — the subnote a note points at, inserted at
+      // the caret so the *user* decides where it sits in the text. Anything else
+      // (`javascript:`, `data:`, a pasted `file://`) becomes plain text, because
+      // a tag this editor did not write is not a tag it should write back.
+      if (!/^(https?:\/\/|#note=)/i.test(href)) return label;
       return `[${label || href}](${href})`;
     }
     case 'SCRIPT':
@@ -222,7 +241,7 @@ export function htmlToMarkdown(node: DomNodeLike): string {
 /** One top-level node as one or more Markdown blocks. */
 function blockOf(node: DomNodeLike): string[] {
   if (node.nodeType === TEXT_NODE) {
-    const text = (node.textContent ?? '').trim();
+    const text = cleanText(node.textContent ?? '').trim();
     return text.length > 0 ? [text] : [];
   }
 
@@ -284,15 +303,25 @@ function blockOf(node: DomNodeLike): string[] {
       return [inner.split('\n').map((line) => (line.trim().length > 0 ? `> ${line}` : '>')).join('\n')];
     }
 
-    case 'DIV':
-    case 'P':
-    case 'SECTION':
-    case 'ARTICLE':
-    case 'BODY':
-    default:
-      // Anything unrecognised is unwrapped rather than re-emitted: the tag was not
-      // written by this editor, so it is not a tag this editor should write back.
+    default: {
+      /*
+       * An inline element can sit *directly in the editable root*, and that is not
+       * an edge case — it is exactly what the Bold button produces on an empty
+       * note: there is no paragraph to wrap, so the wrapper becomes the top-level
+       * node and every character typed afterwards goes inside it. Serialising it
+       * as a container would drop the formatting and store the note as plain text,
+       * which is a silent, data-level version of the bug this file exists to fix.
+       *
+       * So the test is structural: a tag that is not a block is inline content.
+       */
+      if (!BLOCK_TAGS.has(tagOf(node))) {
+        const inline = serialiseInline(node).trim();
+        return inline.length > 0 ? [inline] : [];
+      }
+      // A block container's own text is never reported: its children are, in
+      // order, and reporting both would write the content twice.
       return containerBlocks(node);
+    }
   }
 }
 
@@ -333,7 +362,14 @@ function containerBlocks(node: DomNodeLike): string[] {
   return out;
 }
 
-/** A node's inline text, skipping its child blocks. Used for a quote's body. */
+/**
+ * The tags whose children are blocks rather than inline content.
+ *
+ * Declared after `blockOf` reads it, which is fine: it is a `const` in module
+ * scope and the function only runs long after the module has finished being
+ * evaluated. It is also the whole of the block/inline distinction here — every
+ * tag *not* in this set is treated as inline content wherever it appears.
+ */
 const BLOCK_TAGS = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'UL', 'OL', 'LI', 'PRE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR']);
 
 function innerInlineOf(node: DomNodeLike): string {
@@ -380,6 +416,54 @@ export type EditorCommand =
   | 'quote';
 
 /**
+ * The element an inline command wraps the *next* characters typed in.
+ *
+ * Only these four are "typing" formats. A heading, a list or a quote is a
+ * property of the line the caret is on, and the platform's own command handles
+ * that correctly whether the selection is collapsed or not.
+ */
+const TYPING_TAGS: Partial<Record<EditorCommand, string>> = {
+  bold: 'b',
+  italic: 'i',
+  strike: 'del',
+  code: 'code',
+};
+
+/**
+ * Turn a formatting button into a *state of the keyboard*, not an edit.
+ *
+ * This is the fix for "I press Bold and then type, and it is not bold". With a
+ * caret and no selection there is nothing to wrap, and whether `execCommand`
+ * remembers a pending style for the next keystroke is left to the engine — on
+ * Android's WebView it frequently does not, so the button appeared to do nothing
+ * and the note stayed plain.
+ *
+ * So the wrapper is inserted *now*, empty, and the caret is put inside it. Every
+ * character typed afterwards goes into the element because that is simply where
+ * the caret is; no engine cooperation is involved. The carrier character keeps the
+ * line's height and gives the caret a place to sit in an otherwise empty
+ * paragraph, and the serialiser strips it, so it can never reach the saved
+ * Markdown.
+ */
+function applyTypingStyle(tag: string): boolean {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+
+  const range = selection.getRangeAt(0);
+  const wrapper = document.createElement(tag);
+  const carrier = document.createTextNode('\u200b');
+  wrapper.appendChild(carrier);
+  range.insertNode(wrapper);
+
+  const inner = document.createRange();
+  inner.setStart(carrier, 0);
+  inner.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(inner);
+  return true;
+}
+
+/**
  * Apply a command through the platform's own editing commands.
  *
  * `document.execCommand` is deprecated in the sense that the specification says so
@@ -400,6 +484,13 @@ export function runEditorCommand(command: EditorCommand): boolean {
   } catch {
     /* not supported: the tag-based output is the default anyway */
   }
+
+  // A collapsed caret has nothing to wrap, so the format is armed instead of
+  // applied. Checked before the switch so every typing format behaves the same.
+  const selection = document.getSelection();
+  const caretOnly = Boolean(selection && selection.rangeCount > 0 && selection.isCollapsed);
+  const typingTag = TYPING_TAGS[command];
+  if (caretOnly && typingTag) return applyTypingStyle(typingTag);
 
   const exec = (name: string, value?: string) => {
     try {

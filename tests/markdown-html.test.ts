@@ -152,6 +152,38 @@ describe('htmlToMarkdown', () => {
     );
   });
 
+  it('keeps a reference to a subnote, and drops every other scheme', () => {
+    // `#note=<id>` is the in-body reference the Note button beside the title
+    // inserts at the caret. It has to survive a save, or the reference would
+    // become plain text the first time the note was reopened.
+    expect(htmlToMarkdown(root(el('p', {}, el('a', { href: '#note=abc123' }, text('Plan')))))).toBe(
+      '[Plan](#note=abc123)',
+    );
+    // A `#`-anchor that is not a reference is not a Stash reference.
+    expect(htmlToMarkdown(root(el('p', {}, el('a', { href: '#section' }, text('Down')))))).toBe('Down');
+  });
+
+  it('keeps inline formatting that sits directly in the editable root', () => {
+    // Pressing Bold on an empty note puts the wrapper at the top level — there is
+    // no paragraph to wrap, so the wrapper *is* the paragraph. Serialising it as a
+    // container would drop the formatting and store the note as plain text.
+    expect(htmlToMarkdown(root(el('b', {}, text('bold'))))).toBe('**bold**');
+    expect(htmlToMarkdown(root(el('i', {}, text('it')), el('b', {}, text('bold'))))).toBe(
+      '*it*\n\n**bold**',
+    );
+    expect(htmlToMarkdown(root(el('del', {}, text('gone'))))).toBe('~~gone~~');
+  });
+
+  it('never stores the invisible character the editor uses as a caret carrier', () => {
+    // Bold with no selection arms the format by inserting an empty `<b>` holding a
+    // zero-width space (see `applyTypingStyle`). It is there so the caret has
+    // somewhere to sit; it must not reach the note.
+    const carrier = `\u200b`;
+    expect(htmlToMarkdown(root(el('p', {}, el('b', {}, text(`a${carrier}`)))))).toBe('**a**');
+    expect(htmlToMarkdown(root(el('p', {}, el('b', {}, text(carrier)))))).toBe('');
+    expect(htmlToMarkdown(root(el('p', {}, text(`hel${carrier}lo`))))).toBe('hello');
+  });
+
   it('splits a `<div>` holding blocks rather than serialising its text twice', () => {
     // Browsers wrap loose content in a `<div>` after a stray Enter at the end of a
     // list, so this shape is on the hot path: the wrapper contributes only what is

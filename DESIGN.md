@@ -542,16 +542,32 @@ in `src/lib/privacy/session.ts` rather than by a rule the user has to understand
   not counted into its ancestor, and a hidden link's tags do not appear in the tag
   shelf. "3 links" beside something the user cannot open says as much as the row
   would have.
-- **There is exactly one way in, and no passcode.** Stash keeps no passcode of
-  its own — no setup screen offers one, no settings row adds or changes one, and
-  no copy may imply one exists. The system prompt is the gate the device already
-  trusts, and someone who cannot pass it does not read the locked items; that is
-  the design, not a gap in it. The one exception is a vault created by an older
-  build, whose key is wrapped by a passcode and by nothing else: its gate shows a
-  passcode field, because that field is the only thing standing between the user
-  and permanently unreadable content. Nothing writes a passcode any more, so the
-  copy must speak about it in the past tense ("the passcode this vault was
-  created with").
+- **Two ways in. The device prompt is the default; a passcode is optional but real.**
+  Stash no longer *creates* a passcode by default — today's setup offers the device
+  prompt first, and a vault can be locked with the device alone. That is the normal,
+  supported path, not a degraded one. But Stash still has a passcode, and a passcode
+  is still a first-class way into a vault, not a legacy leftover: you can add one
+  later, change it, or (if the device prompt is armed) remove it, and the settings
+  copy treats it as a current choice, not as a relic.
+
+  The device prompt is the quicker way in, and the app speaks about it by its real
+  name ("your fingerprint, face or phone PIN" on a phone; "Windows Hello or your
+  device PIN" on a PC) rather than by the vague word "biometrics". The passcode is
+  the way in that the device cannot take away: the OS can withdraw a fingerprint, a
+  face, a screen lock, an enrollment; it cannot withdraw a passcode Stash already
+  wrapped the key with. That difference is why adding a passcode is offered as its
+  own action and why removing the device prompt leaves the passcode exactly as it
+  was.
+
+  The one legacy special case is a vault created by an older build whose key is
+  wrapped by a passcode and by nothing else: its gate shows a passcode field, because
+  that field is the only thing standing between the user and permanently unreadable
+  content. Nothing in the current app creates a passcode-only vault any more, so the
+  copy must speak about that case in the past tense ("the passcode this vault was
+  created with"). A wrong passcode does not prove a PIN wrong and then fall back to
+  something else: a passcode only ever tries to unwrap the vault key, and if the GCM
+  tag rejects it the attempt fails. It is a way in whose only verifier is the sealed
+  content itself.
 - **Name the platform dialog.** "Windows Hello or your device PIN" on a PC,
   "your fingerprint, face or phone PIN" on a phone. Never "biometrics".
 - **Say what it costs, at the moment it is chosen.** A vault locked by the device

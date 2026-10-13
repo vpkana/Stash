@@ -50,13 +50,32 @@ export interface RichTextEditorProps {
   className?: string;
   /** Receives the command API so a toolbar can drive the selection. */
   onReady?: (api: RichTextApi) => void;
+  /**
+   * Open the subnote an in-body reference points at.
+   *
+   * A note can hold a reference to one of its subnotes (`#note=<id>`, inserted at
+   * the caret by the Note button beside the title), and this is what turns that
+   * reference into navigation instead of a dead link.
+   */
+  onOpenReference?: (noteId: string) => void;
   ariaLabel?: string;
 }
 
 export interface RichTextApi {
   run: (command: EditorCommand) => void;
-  /** Wrap the selection in a Markdown link, using the text as the label. */
-  insertLink: (href: string) => void;
+  /**
+   * Remember where the caret is.
+   *
+   * Called *before* a dialog or a sheet opens, because opening one moves focus
+   * out of the editable node and the selection is gone by the time the user has
+   * chosen something. Restoring it is what makes "insert it where my cursor is"
+   * mean the place the user was actually looking at.
+   */
+  saveSelection: () => void;
+  /** Wrap the remembered selection (or the current one) in a link. */
+  insertLink: (href: string, label?: string) => void;
+  /** Insert a reference to a subnote at the remembered caret. */
+  insertNoteReference: (noteId: string, title: string) => void;
   /** Insert plain text at the caret, as a paragraph. */
   insertText: (text: string) => void;
   focus: () => void;
@@ -69,9 +88,18 @@ export function RichTextEditor({
   placeholder,
   className,
   onReady,
+  onOpenReference,
   ariaLabel = 'Note body',
 }: RichTextEditorProps) {
   const ref = React.useRef<HTMLDivElement>(null);
+  /**
+   * Where the caret was when the last dialog opened.
+   *
+   * A live `Range` is only valid while the DOM around it is unchanged, and the
+   * parent re-renders in between (a sheet opening, an attachment landing), so the
+   * remembered range is re-validated before use rather than trusted.
+   */
+  const savedRange = React.useRef<Range | null>(null);
   /**
    * The Markdown this editor last produced, so an incoming change that is *its
    * own* output is not applied back as a DOM rewrite. Comparing against the value
@@ -195,6 +223,44 @@ export function RichTextEditor({
     else item.removeAttribute('data-checkbox');
   }, []);
 
+  /**
+   * Put the caret back where {@link RichTextApi.saveSelection} left it.
+   *
+   * Returns `true` when a remembered position was restored. A range whose node is
+   * no longer in the document — the note was re-rendered, the wrapper was
+   * replaced — is dropped rather than applied, because applying a stale range can
+   * throw or, worse, silently insert at the start of the note.
+   */
+  const restoreSelection = React.useCallback((): boolean => {
+    const element = ref.current;
+    if (!element) return false;
+    element.focus();
+    const range = savedRange.current;
+    if (!range) return false;
+    if (!element.contains(range.startContainer)) {
+      savedRange.current = null;
+      return false;
+    }
+    const selection = document.getSelection();
+    if (!selection) return false;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }, []);
+
+  /** Insert an HTML fragment at the remembered caret (or the current one). */
+  const insertHtml = React.useCallback(
+    (html: string) => {
+      const element = ref.current;
+      if (!element || readOnly) return;
+      restoreSelection();
+      document.execCommand('insertHTML', false, html);
+      savedRange.current = null;
+      emit();
+    },
+    [emit, readOnly, restoreSelection],
+  );
+
   const api = React.useMemo<RichTextApi>(
     () => ({
       run: (command) => {
@@ -208,29 +274,29 @@ export function RichTextEditor({
         }
         emit();
       },
-      insertLink: (href) => {
+      saveSelection: () => {
         const element = ref.current;
-        if (!element || readOnly) return;
-        element.focus();
         const selection = document.getSelection();
-        const label = selection?.toString() ?? '';
-        document.execCommand(
-          'insertHTML',
-          false,
-          `<a href="${escapeHtml(href)}">${escapeHtml(label || href)}</a>`,
-        );
-        emit();
+        if (!element || !selection || selection.rangeCount === 0) return;
+        if (!element.contains(selection.anchorNode)) return;
+        savedRange.current = selection.getRangeAt(0).cloneRange();
       },
-      insertText: (text) => {
+      insertLink: (href, label) => {
         const element = ref.current;
         if (!element || readOnly) return;
-        element.focus();
-        document.execCommand('insertHTML', false, escapeHtml(text));
-        emit();
+        restoreSelection();
+        const selected = document.getSelection()?.toString() ?? '';
+        const text = label?.trim() || selected.trim() || href;
+        insertHtml(`<a href="${escapeHtml(href)}">${escapeHtml(text)}</a>`);
       },
+      insertNoteReference: (noteId, title) => {
+        const text = title?.trim() || 'Subnote';
+        insertHtml(`<a href="#note=${escapeHtml(noteId)}">${escapeHtml(text)}</a>`);
+      },
+      insertText: (text) => insertHtml(escapeHtml(text)),
       focus: () => ref.current?.focus(),
     }),
-    [emit, readOnly, toggleChecklistAtSelection],
+    [emit, insertHtml, readOnly, restoreSelection, toggleChecklistAtSelection],
   );
 
   // Hand the command API up once, and keep it current without re-mounting the
@@ -255,6 +321,18 @@ export function RichTextEditor({
   const onClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (readOnly) return;
     const target = event.target as HTMLElement;
+
+    // An in-body reference to a subnote opens it. Handled before the checkbox
+    // test because a reference is a link, and a link inside a list item would
+    // otherwise be swallowed by the item's click.
+    const reference = target.closest('a[href^="#note="]');
+    if (reference && onOpenReference) {
+      event.preventDefault();
+      const id = reference.getAttribute('href')?.slice('#note='.length) ?? '';
+      if (id) onOpenReference(id);
+      return;
+    }
+
     const item = target.closest('li[data-checkbox]');
     if (!item) return;
     const range = document.createRange();

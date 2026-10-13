@@ -274,6 +274,17 @@ export interface PrivacySettings {
   secureScreen: boolean;
   /** Whether the device prompt is part of the way in. */
   biometric: boolean;
+  /**
+   * Which of the two ways in the lock prompts for **first**.
+   *
+   * Both remain available — the other is one tap away in the same dialog — so
+   * this is a *preference about the default*, not a restriction. `device` is the
+   * default because it is the one with nothing to type, which is what makes it
+   * worth preferring; a preference that asks the device to prompt on a machine
+   * with no device wrap armed is ignored by the gate, which falls back to the
+   * passcode rather than showing a button that cannot work.
+   */
+  primaryUnlock: 'device' | 'passcode';
 }
 
 /**
@@ -289,6 +300,9 @@ export const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
   lockApp: true,
   secureScreen: false,
   biometric: true,
+  // The fingerprint/face/Hello prompt first, because it is the one with nothing
+  // to type. It is only ever used when a device wrap is actually armed.
+  primaryUnlock: 'device',
 };
 
 /** Wrapped (never raw) key material. Everything here is ciphertext or public. */
