@@ -22,7 +22,7 @@ import {
 import type { Note } from '@/db/types';
 import { autosaveLabel } from '@/lib/autosave';
 import { normaliseLinkHref } from '@/lib/markdown';
-import type { EditorCommand } from '@/lib/markdown-html';
+import { NO_FORMATS, type EditorCommand, type FormatState } from '@/lib/markdown-html';
 import { useAutosave } from '@/hooks/use-autosave';
 import { useEditorStore } from '@/stores/editor-store';
 import { cn } from '@/lib/utils';
@@ -53,14 +53,24 @@ import { MarkdownView } from './markdown-view';
  * ## Note and Link, beside the title
  *
  * The two buttons next to the title create the two things a note refers to: a
- * **subnote** and a **saved link**. Both insert what they created *at the caret*,
- * which is the point of putting them here rather than in a menu below the text —
- * the user chooses where in the note the reference sits, instead of having it
- * appended wherever the editor happened to think the end was.
+ * **subnote** and a **link**. Both insert what they made *at the caret*, which is
+ * the point of putting them here rather than in a menu below the text — the user
+ * chooses where in the note the reference sits, instead of having it appended
+ * wherever the editor happened to think the end was.
+ *
+ * Both also stop short of deciding for the user. The Note button opens a sheet
+ * where the subnote is named first, or where an existing note is taken as one,
+ * because "make a note" is not a decision about a name and a place — pressing it
+ * used to produce an untitled "New subnote" nobody asked for. The Link button
+ * opens the picker, which offers the vault's links *and* the address that has been
+ * pasted into the search box: the second is written into this note and saved
+ * nowhere, because a URL mentioned once is not a thing to file.
  *
  * That placement is why the caret is saved before either button runs: opening the
- * link picker moves focus out of the body, so the position is captured first and
- * restored when the insertion happens.
+ * sheet or the picker moves focus out of the body, so the position is captured
+ * first and restored when the insertion happens. And a link put on a selection
+ * wraps *those words* — the sentence the user selected is the link, not a label
+ * the editor chose for them.
  *
  * There is no Read/Edit toggle either: the body *is* the formatted view while you
  * write it, and the reading view exists where it always mattered — in the rendered
@@ -120,6 +130,15 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const [draft, setDraft] = React.useState<NoteDraft>({ title: note.title, content: note.content });
   const [linkDraft, setLinkDraft] = React.useState<string | null>(null);
+  /**
+   * Which formats are on where the caret is.
+   *
+   * The one piece of the toolbar that is *state* rather than an action, and the
+   * reason the formatting buttons can be read at a glance: Bold is highlighted
+   * exactly while typing would produce bold text, so pressing it twice visibly
+   * turns it off instead of silently nesting another wrapper.
+   */
+  const [formats, setFormats] = React.useState<FormatState>(NO_FORMATS);
 
   const apiRef = React.useRef<RichTextApi | null>(null);
   const titleRef = React.useRef<HTMLInputElement>(null);
@@ -283,6 +302,7 @@ export function NoteEditor({
             apiRef.current = api;
             onApiReady?.(api);
           }}
+          onFormatStateChange={setFormats}
         />
       )}
 
@@ -346,10 +366,10 @@ export function NoteEditor({
           </div>
         ) : (
           <div className="scroll-area no-scrollbar flex items-center gap-1 overflow-x-auto px-2 py-1.5">
-            <ToolButton label="Bold" icon={<Bold size={17} weight="bold" aria-hidden />} command="bold" api={apiRef} />
-            <ToolButton label="Italic" icon={<Italic size={17} weight="bold" aria-hidden />} command="italic" api={apiRef} />
-            <ToolButton label="Strikethrough" icon={<Strikethrough size={17} weight="bold" aria-hidden />} command="strike" api={apiRef} />
-            <ToolButton label="Inline code" icon={<Code size={17} weight="bold" aria-hidden />} command="code" api={apiRef} />
+            <ToolButton label="Bold" icon={<Bold size={17} weight="bold" aria-hidden />} command="bold" api={apiRef} active={formats.bold} />
+            <ToolButton label="Italic" icon={<Italic size={17} weight="bold" aria-hidden />} command="italic" api={apiRef} active={formats.italic} />
+            <ToolButton label="Strikethrough" icon={<Strikethrough size={17} weight="bold" aria-hidden />} command="strike" api={apiRef} active={formats.strike} />
+            <ToolButton label="Inline code" icon={<Code size={17} weight="bold" aria-hidden />} command="code" api={apiRef} active={formats.code} />
             <Divider />
             <ToolButton label="Heading" icon={<Heading2 size={17} weight="bold" aria-hidden />} command="heading" api={apiRef} />
             <ToolButton label="Bulleted list" icon={<List size={17} weight="bold" aria-hidden />} command="bulletList" api={apiRef} />
@@ -383,21 +403,24 @@ function Divider() {
 /**
  * One formatting button.
  *
- * It does not track state ("is this selection bold?"). A live pressed state would
- * mean re-rendering the toolbar on every selection change, and every such
- * re-render is a chance to fight the editable node for the caret. The buttons act;
- * the document shows the result, which is the immediate feedback that matters.
+ * `active` is the state of the format where the caret is, reported by the editor.
+ * It is not derived here by asking the DOM on every render: the answer depends on
+ * a selection the browser owns, and the editor is the only place that already
+ * watches it. Re-rendering this button is safe because the editor never rebuilds
+ * its editable node from props — see the note at the top of `rich-text-editor.tsx`.
  */
 function ToolButton({
   label,
   icon,
   command,
   api,
+  active = false,
 }: {
   label: string;
   icon: React.ReactNode;
   command: EditorCommand;
   api: React.RefObject<RichTextApi | null>;
+  active?: boolean;
 }) {
   return (
     <button
@@ -405,8 +428,12 @@ function ToolButton({
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => api.current?.run(command)}
       aria-label={label}
+      aria-pressed={active}
       title={label}
-      className="tap tap-scale flex size-9 shrink-0 items-center justify-center rounded-xl text-muted active:bg-surface-2"
+      className={cn(
+        'tap tap-scale flex size-9 shrink-0 items-center justify-center rounded-xl active:bg-surface-2',
+        active ? 'nav-active font-semibold' : 'text-muted',
+      )}
     >
       {icon}
     </button>

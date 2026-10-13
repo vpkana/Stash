@@ -50,7 +50,7 @@ import { ConfirmAuth } from './confirm-auth';
  * either tapping a locked folder or the deliberate "open everything" below.
  */
 
-type Mode = 'idle' | 'setup' | 'disable' | 'abandon' | 'passcode' | 'remove-passcode' | 'open-all';
+type Mode = 'idle' | 'setup' | 'abandon' | 'passcode' | 'remove-passcode' | 'open-all';
 
 export function PrivacySettings() {
   const ready = usePrivacyStore((state) => state.ready);
@@ -68,7 +68,6 @@ export function PrivacySettings() {
   // that one types a character.
   const savePasscode = usePrivacyStore((state) => state.setPasscode);
   const removePasscode = usePrivacyStore((state) => state.removePasscode);
-  const disable = usePrivacyStore((state) => state.disable);
   const abandonLock = usePrivacyStore((state) => state.abandonLock);
   const update = usePrivacyStore((state) => state.update);
   const armBiometrics = usePrivacyStore((state) => state.armBiometrics);
@@ -117,8 +116,6 @@ export function PrivacySettings() {
   }, []);
 
   const devicePath = deviceAuthAvailable && deviceUnlockReady;
-  /** No device prompt to authorise with, so the passcode has to do it. */
-  const passcodeAuthorisesDisable = !deviceUnlockReady;
 
   const lockedCounts = {
     folders: protection.folders.size,
@@ -183,16 +180,6 @@ export function PrivacySettings() {
     }
     reset();
     toast('Passcode removed. The device prompt is now the only way in.', { tone: 'success' });
-  };
-
-  const submitDisable = async () => {
-    const result = await disable(passcode);
-    if (!result.ok) {
-      setError(result.message ?? 'Could not turn locking off.');
-      return;
-    }
-    reset();
-    toast('Locking is off. Everything is readable again.', { tone: 'success' });
   };
 
   /**
@@ -331,14 +318,19 @@ export function PrivacySettings() {
                       }}
                     />
                   ) : null}
-                  <ActionButton
-                    icon={<Unlock size={18} strokeWidth={1.9} aria-hidden />}
-                    label="Turn locking off"
-                    onClick={() => {
-                      reset();
-                      setMode('disable');
-                    }}
-                  />
+                  {/*
+                    * There is deliberately no "turn locking off".
+                    *
+                    * It was the one action in the app that unsealed content: it
+                    * decrypted every locked item back into the clear and removed
+                    * both ways in — a single switch that undid the protection the
+                    * user had asked for, on an unlocked phone, in one tap plus a
+                    * prompt. What a person actually needs from this screen is to
+                    * manage the passcode (above) and to open what is locked for a
+                    * while (below); neither requires giving the protection up.
+                    * The irreversible one is still here, and it is named for what
+                    * it costs rather than for what it turns off.
+                    */}
                 </div>
               )}
             </div>
@@ -493,47 +485,6 @@ export function PrivacySettings() {
             </div>
           ) : null}
 
-          {mode === 'disable' ? (
-            <div className="border-t border-border px-3 py-3">
-              <div className="flex flex-col gap-3">
-                <p className="rounded-xl border border-warning/30 bg-surface-2 px-3 py-2.5 text-meta leading-relaxed text-fg/85">
-                  Turning locking off decrypts every locked item and stores it in the clear again, and removes both
-                  ways in. {passcodeAuthorisesDisable ? 'Your passcode confirms it.' : 'The device lock confirms it.'}
-                </p>
-                {passcodeAuthorisesDisable ? (
-                  <PasscodeInput
-                    label="Passcode"
-                    value={passcode}
-                    onChange={(value) => {
-                      setPasscode(value);
-                      setError(null);
-                    }}
-                    onSubmit={() => void submitDisable()}
-                    autoFocus
-                    disabled={busy}
-                    {...(error ? { tone: 'danger' as const, hint: error } : {})}
-                  />
-                ) : (
-                  <p className="text-meta leading-relaxed text-muted">
-                    {devicePromptName(deviceStoreKind)} confirms it instead.
-                  </p>
-                )}
-                <div className="flex gap-2">
-                  <Button variant="ghost" className="flex-1" onClick={reset} disabled={busy}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="surface"
-                    className="flex-1"
-                    disabled={busy || (passcodeAuthorisesDisable && passcode.length === 0)}
-                    onClick={() => void submitDisable()}
-                  >
-                    Turn off and decrypt
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </div>
       </Section>
 

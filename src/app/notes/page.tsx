@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, PageTitle, Section } from '@/components/ui/page';
 import { toast } from '@/components/ui/toast';
 import { NoteEditor } from '@/components/notes/note-editor';
+import { SubnoteSheet } from '@/components/notes/subnote-sheet';
 import type { RichTextApi } from '@/components/notes/rich-text-editor';
 import { NoteRow } from '@/components/notes/note-row';
 import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
@@ -51,6 +52,15 @@ function NotesView() {
   const [activeNote, setActiveNote] = React.useState<Note | null>(null);
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
   const [picking, setPicking] = React.useState(false);
+  /**
+   * The Note button opens a decision, not a note.
+   *
+   * Pressing it used to create an untitled subnote on the spot and drop a
+   * reference to it into the sentence being written — a name nobody chose, and a
+   * note to go and rename. This is the sheet where the name (or the existing note
+   * that should live here) is chosen first; nothing exists until then.
+   */
+  const [addingSubnote, setAddingSubnote] = React.useState(false);
   /**
    * The open editor's insertion API.
    *
@@ -112,6 +122,24 @@ function NotesView() {
     return { childCounts, linkCounts, trail, subnotes, resources };
   }, [current, links, noteLinks, notes, visibleNotes, hiddenLinks]);
 
+  /**
+   * What could become a subnote of the note being read.
+   *
+   * Everything readable except the note itself, what is already below it (a note
+   * cannot contain its own ancestor) and the subnotes it already has — those are
+   * listed on the screen already, and offering them again would be offering a
+   * move to the place they already are.
+   */
+  const nestCandidates = React.useMemo(() => {
+    if (!current) return [];
+    const blocked = new Set(noteDescendantIds(notes, current.id));
+    blocked.add(current.id);
+    for (const subnote of subnotes) blocked.add(subnote.id);
+    return visibleNotes
+      .filter((note) => !blocked.has(note.id))
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }, [current, notes, subnotes, visibleNotes]);
+
   // `current` is present but unreadable: see the editor branch below. Asked of
   // the central access check rather than of the ciphertext, so a deep link into a
   // note the session has not unlocked never reaches the editor.
@@ -149,25 +177,52 @@ function NotesView() {
   );
 
   /**
-   * A subnote made *from the body*.
+   * A subnote made *from the body*, once it has a name.
    *
    * Deliberately not the same as the New-note button: this one does not navigate
    * away. The whole point of the Note button beside the title is that the user is
-   * writing a sentence and wants to point at a new subnote from *here*, so the
+   * writing a sentence and wants to point at a subnote from *here*, so the
    * reference lands at the caret and the caret stays in the note being written.
    */
-  const addSubnoteAtCaret = React.useCallback(async (parentId: string) => {
-    const result = await useVaultStore.getState().createNote({
-      title: 'New subnote',
-      content: '',
-      parentNoteId: parentId,
-    });
-    if (!result.ok) {
-      toast(result.message, { tone: 'danger' });
-      return;
-    }
-    editorApi.current?.insertNoteReference(result.note.id, result.note.title);
-  }, []);
+  const createSubnoteAtCaret = React.useCallback(
+    async (parentId: string, title: string) => {
+      const result = await useVaultStore.getState().createNote({
+        title,
+        content: '',
+        parentNoteId: parentId,
+      });
+      if (!result.ok) {
+        toast(result.message, { tone: 'danger' });
+        return;
+      }
+      setAddingSubnote(false);
+      editorApi.current?.insertNoteReference(result.note.id, result.note.title);
+      toast('Subnote added here');
+    },
+    [],
+  );
+
+  /**
+   * A note that already exists, moved under this one.
+   *
+   * The other half of the same decision: a subnote is a *relationship*, and the
+   * note for it may already have been written. Moving it rather than copying is
+   * the only version that keeps one note in one place, and it is undoable by
+   * moving it back.
+   */
+  const nestSubnoteAtCaret = React.useCallback(
+    async (parentId: string, note: Note) => {
+      const result = await useVaultStore.getState().moveNote(note.id, parentId);
+      if (!result.ok) {
+        toast(result.reason, { tone: 'danger' });
+        return;
+      }
+      setAddingSubnote(false);
+      editorApi.current?.insertNoteReference(note.id, note.title);
+      toast('Note nested here');
+    },
+    [],
+  );
 
   const openLink = React.useCallback((link: SavedLink) => {
     void useVaultStore.getState().markLinkOpened(link.id);
@@ -294,7 +349,7 @@ function NotesView() {
             {...(current.isLocked
               ? { onUnlock: () => void useVaultStore.getState().toggleNoteLocked(current.id, false) }
               : {})}
-            onAddSubnote={() => void addSubnoteAtCaret(current.id)}
+            onAddSubnote={() => setAddingSubnote(true)}
             onAttachLink={() => setPicking(true)}
             onApiReady={(api) => {
               editorApi.current = api;
@@ -358,10 +413,27 @@ function NotesView() {
           }}
         />
 
+        <SubnoteSheet
+          open={addingSubnote}
+          onClose={() => setAddingSubnote(false)}
+          parentTitle={current.title}
+          candidates={nestCandidates}
+          onCreate={(title) => void createSubnoteAtCaret(current.id, title)}
+          onNest={(note) => void nestSubnoteAtCaret(current.id, note)}
+        />
+
         <LinkPickerSheet
           open={picking}
           onClose={() => setPicking(false)}
           attachedIds={resources.map((link) => link.id)}
+          lockedCount={hiddenLinks.size}
+          onPickAddress={(url) => {
+            setPicking(false);
+            // Nothing is saved: the address is written into this note, and the
+            // editor turns it into a link if it landed on a selection.
+            editorApi.current?.insertAddress(url);
+            toast('Address added to this note');
+          }}
           onPick={(link) => {
             setPicking(false);
             void useVaultStore.getState().attachLink(current.id, link.id).then((ok) => {

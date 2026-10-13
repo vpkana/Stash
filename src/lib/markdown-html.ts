@@ -161,8 +161,8 @@ const TEXT_NODE = 3;
  *
  * `U+200B` is inserted inside an empty formatting wrapper so the caret has
  * somewhere to sit when the user presses Bold on nothing and starts typing (see
- * {@link applyTypingStyle}); a caret cannot be placed in a truly empty element in
- * every engine. It is stripped here rather than never inserted, because the
+ * {@link toggleTypingStyle}); a caret cannot be placed in a truly empty element
+ * in every engine. It is stripped here rather than never inserted, because the
  * alternative — a bold toggle that silently does nothing — is the bug this
  * exists to fix, and `String.prototype.trim` does not remove it.
  */
@@ -216,6 +216,11 @@ function serialiseInline(node: DomNodeLike): string {
       // (`javascript:`, `data:`, a pasted `file://`) becomes plain text, because
       // a tag this editor did not write is not a tag it should write back.
       if (!/^(https?:\/\/|#note=)/i.test(href)) return label;
+      // A link whose text *is* its address is written back as the address. The
+      // reader autolinks it again (see `renderInline`), so nothing is lost, and
+      // an address the user typed stays the plain text they typed instead of
+      // accumulating `[https://…](https://…)` brackets it never had.
+      if (label === href || label === href.replace(/^https?:\/\/(www\.)?/i, '')) return href;
       return `[${label || href}](${href})`;
     }
     case 'SCRIPT':
@@ -429,6 +434,98 @@ const TYPING_TAGS: Partial<Record<EditorCommand, string>> = {
   code: 'code',
 };
 
+type TypingCommand = 'bold' | 'italic' | 'strike' | 'code';
+
+/**
+ * Every tag that *means* one of the typing formats, however it got there.
+ *
+ * `b`/`strong` and `i`/`em` are the same format spelled two ways: the platform's
+ * own command writes one pair, this editor's wrapper writes the other, and a
+ * pasted fragment can contain either. A button that only recognised its own
+ * spelling would report "not bold" while the caret sat inside bold text — which
+ * is how a toggle ends up on when it looks off.
+ */
+const FORMAT_TAGS: Record<TypingCommand, readonly string[]> = {
+  bold: ['B', 'STRONG'],
+  italic: ['I', 'EM'],
+  strike: ['DEL', 'S', 'STRIKE'],
+  code: ['CODE'],
+};
+
+/** The invisible caret carrier, as a value rather than as a pattern. */
+const CARET_CARRIER_TEXT = '\u200b';
+
+/** What the toolbar needs to know: which formats are on at the caret. */
+export interface FormatState {
+  bold: boolean;
+  italic: boolean;
+  strike: boolean;
+  code: boolean;
+}
+
+export const NO_FORMATS: FormatState = { bold: false, italic: false, strike: false, code: false };
+
+/** The nearest ancestor of `node`, itself included, whose tag is in `tags`. */
+function enclosingTag(node: Node | null, tags: readonly string[]): HTMLElement | null {
+  let cursor: Node | null = node;
+  while (cursor && cursor.nodeType !== 1) cursor = cursor.parentNode;
+  while (cursor) {
+    const element = cursor as HTMLElement;
+    if (tags.includes(element.tagName)) return element;
+    cursor = element.parentNode;
+  }
+  return null;
+}
+
+/**
+ * The nearest ancestor that is a link.
+ *
+ * Exported because the editor has to ask the same question before it autolinks:
+ * an address already inside an anchor is already a link, and re-wrapping it would
+ * nest one anchor in another.
+ */
+export function enclosingAnchor(node: Node | null): HTMLElement | null {
+  return enclosingTag(node, ['A']);
+}
+
+function placeCaret(range: Range): void {
+  const selection = document.getSelection();
+  if (!selection) return;
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function commandState(name: string): boolean {
+  try {
+    return document.queryCommandState(name);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which formats are on where the caret is.
+ *
+ * Both questions are asked, because they answer different halves of it: the DOM
+ * walk answers "is this text already bold" (which covers a caret parked in bold
+ * text, and a selection over it), and `queryCommandState` answers "would the next
+ * character be bold" (the engine's own pending state). Neither alone is right in
+ * both cases, and the toolbar shows exactly one light per format.
+ */
+export function activeFormats(): FormatState {
+  if (typeof document === 'undefined') return NO_FORMATS;
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return NO_FORMATS;
+  const start = selection.getRangeAt(0).startContainer;
+  const inTag = (tags: readonly string[]) => Boolean(enclosingTag(start, tags));
+  return {
+    bold: inTag(FORMAT_TAGS.bold) || commandState('bold'),
+    italic: inTag(FORMAT_TAGS.italic) || commandState('italic'),
+    strike: inTag(FORMAT_TAGS.strike) || commandState('strikeThrough'),
+    code: inTag(FORMAT_TAGS.code),
+  };
+}
+
 /**
  * Turn a formatting button into a *state of the keyboard*, not an edit.
  *
@@ -444,22 +541,66 @@ const TYPING_TAGS: Partial<Record<EditorCommand, string>> = {
  * line's height and gives the caret a place to sit in an otherwise empty
  * paragraph, and the serialiser strips it, so it can never reach the saved
  * Markdown.
+ *
+ * It is a *toggle*, and it reports which way it went, so the button that was
+ * pressed is the button that looks pressed. Turning a format back off is not the
+ * same operation as turning it on, and it is not a text edit either: see the two
+ * cases below.
+ *
+ * @returns whether the format is now armed at the caret.
  */
-function applyTypingStyle(tag: string): boolean {
+export function toggleTypingStyle(command: TypingCommand): boolean {
   const selection = document.getSelection();
   if (!selection || selection.rangeCount === 0) return false;
 
   const range = selection.getRangeAt(0);
-  const wrapper = document.createElement(tag);
-  const carrier = document.createTextNode('\u200b');
+  const active = enclosingTag(range.startContainer, FORMAT_TAGS[command]);
+
+  if (active) {
+    /*
+     * Turning the format off, which is the half that used to be missing: the
+     * button only ever added a wrapper, so pressing it twice nested one inside
+     * the other and the text stayed bold.
+     *
+     * There are two shapes to undo. An *empty* wrapper is the one this function
+     * inserted a moment ago — nothing has been typed in it yet — and it goes away
+     * entirely, leaving the caret exactly where it was. Anything else is a run of
+     * text that is already formatted, and the honest answer there is to step the
+     * caret outside it, so the next character typed is plain; rewriting text the
+     * user has already written is not what pressing an un-pressed button means.
+     */
+    if (active.textContent === CARET_CARRIER_TEXT) {
+      const after = document.createRange();
+      after.setStartAfter(active);
+      after.collapse(true);
+      active.remove();
+      placeCaret(after);
+      return false;
+    }
+    const outside = document.createRange();
+    outside.setStartAfter(active);
+    outside.collapse(true);
+    placeCaret(outside);
+    return false;
+  }
+
+  /*
+   * Turning it on. The wrapper is inserted *now*, empty, with the caret inside
+   * it: every character typed afterwards goes into the element because that is
+   * simply where the caret is, and no engine cooperation is involved. The carrier
+   * character keeps the line's height and gives the caret a place to sit in an
+   * otherwise empty paragraph, and the serialiser strips it, so it never reaches
+   * the saved Markdown.
+   */
+  const wrapper = document.createElement(TYPING_TAGS[command] ?? 'b');
+  const carrier = document.createTextNode(CARET_CARRIER_TEXT);
   wrapper.appendChild(carrier);
   range.insertNode(wrapper);
 
   const inner = document.createRange();
   inner.setStart(carrier, 0);
   inner.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(inner);
+  placeCaret(inner);
   return true;
 }
 
@@ -485,12 +626,13 @@ export function runEditorCommand(command: EditorCommand): boolean {
     /* not supported: the tag-based output is the default anyway */
   }
 
-  // A collapsed caret has nothing to wrap, so the format is armed instead of
-  // applied. Checked before the switch so every typing format behaves the same.
+  // A collapsed caret has nothing to wrap, so the format is toggled as a state
+  // of the keyboard instead of applied to a range. Checked before the switch so
+  // every typing format behaves the same — and so that pressing the button a
+  // second time turns it off rather than nesting another wrapper.
   const selection = document.getSelection();
   const caretOnly = Boolean(selection && selection.rangeCount > 0 && selection.isCollapsed);
-  const typingTag = TYPING_TAGS[command];
-  if (caretOnly && typingTag) return applyTypingStyle(typingTag);
+  if (caretOnly && command in TYPING_TAGS) return toggleTypingStyle(command as TypingCommand);
 
   const exec = (name: string, value?: string) => {
     try {

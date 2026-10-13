@@ -82,6 +82,15 @@ describe('markdownToHtml', () => {
       '<p><a href="https://example.com/a?b=1&amp;c=2">site</a></p>',
     );
   });
+
+  it('autolinks a bare host, so an address typed without a scheme is a link', () => {
+    // This is what makes the editor's own autolinking work at rest: the note is
+    // opened from Markdown, and the address the user typed is already an anchor
+    // before a caret ever touches it.
+    expect(markdownToHtml('read google.com now')).toBe(
+      '<p>read <a href="https://google.com">google.com</a> now</p>',
+    );
+  });
 });
 
 describe('htmlToMarkdown', () => {
@@ -152,6 +161,23 @@ describe('htmlToMarkdown', () => {
     );
   });
 
+  it('writes an address that is its own label back as the address', () => {
+    // Autolinking produces an anchor whose text *is* the address, and the reader
+    // links that text again by itself. Storing `[https://x](https://x)` would be
+    // the same link wrapped in markup the user never wrote — and a link whose
+    // words say something else still keeps the bracket form, because there the
+    // label is content.
+    expect(
+      htmlToMarkdown(root(el('p', {}, el('a', { href: 'https://google.com' }, text('https://google.com'))))),
+    ).toBe('https://google.com');
+    expect(
+      htmlToMarkdown(root(el('p', {}, el('a', { href: 'https://google.com' }, text('google.com'))))),
+    ).toBe('https://google.com');
+    expect(htmlToMarkdown(root(el('p', {}, el('a', { href: 'https://google.com' }, text('Google')))))).toBe(
+      '[Google](https://google.com)',
+    );
+  });
+
   it('keeps a reference to a subnote, and drops every other scheme', () => {
     // `#note=<id>` is the in-body reference the Note button beside the title
     // inserts at the caret. It has to survive a save, or the reference would
@@ -176,7 +202,7 @@ describe('htmlToMarkdown', () => {
 
   it('never stores the invisible character the editor uses as a caret carrier', () => {
     // Bold with no selection arms the format by inserting an empty `<b>` holding a
-    // zero-width space (see `applyTypingStyle`). It is there so the caret has
+    // zero-width space (see `toggleTypingStyle`). It is there so the caret has
     // somewhere to sit; it must not reach the note.
     const carrier = `\u200b`;
     expect(htmlToMarkdown(root(el('p', {}, el('b', {}, text(`a${carrier}`)))))).toBe('**a**');

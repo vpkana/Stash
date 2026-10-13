@@ -31,6 +31,7 @@ import {
   renderInline,
   toggleChecklistItem,
   toggleLinePrefix,
+  trailingUrl,
   wrapSelection,
 } from '@/lib/markdown';
 import { AutosaveController, autosaveLabel } from '@/lib/autosave';
@@ -356,6 +357,50 @@ describe('inline markdown', () => {
     const nodes = renderInline('`**not bold**`');
     expect(nodes).toHaveLength(1);
     expect(nodes[0]).toMatchObject({ type: 'code', value: '**not bold**' });
+  });
+
+  it('links a bare host, with or without www, and keeps a path with it', () => {
+    // The behaviour every other notes app has and the one the user asked for by
+    // name: an address typed without a scheme is a link. The scheme is supplied
+    // for the href and *not* shown, so the note reads as it was written.
+    expect(renderInline('read google.com now')[1]).toMatchObject({
+      type: 'link',
+      value: 'google.com',
+      href: 'https://google.com',
+    });
+    expect(renderInline('go to www.example.com')[1]).toMatchObject({
+      type: 'link',
+      href: 'https://www.example.com',
+    });
+    expect(renderInline('see example.co.uk/docs?q=1')[1]).toMatchObject({
+      type: 'link',
+      href: 'https://example.co.uk/docs?q=1',
+    });
+  });
+
+  it('leaves a filename, an abbreviation, a version and an email address alone', () => {
+    // The top-level-domain list is what separates an address from a sentence, and
+    // the guard before a bare host is what keeps the domain out of an email.
+    for (const source of ['Node.js', 'e.g.', 'v1.2', 'me@example.com']) {
+      expect(renderInline(source).every((node) => node.type === 'text')).toBe(true);
+    }
+  });
+
+  it('reports the address that ends what has been typed, for the editor to link', () => {
+    // The editor autolinks while writing, and this is the one question it asks:
+    // does the text before the caret end in an address? Ask it anything else and
+    // the two would disagree about what a link is.
+    expect(trailingUrl('see it at google.com')).toMatchObject({
+      text: 'google.com',
+      start: 10,
+      href: 'https://google.com',
+    });
+    expect(trailingUrl('https://example.com/a ')).toMatchObject({
+      text: 'https://example.com/a',
+      href: 'https://example.com/a',
+    });
+    expect(trailingUrl('no address in this line')).toBeNull();
+    expect(trailingUrl('half a domain: example.c')).toBeNull();
   });
 });
 
