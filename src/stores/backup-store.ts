@@ -64,6 +64,13 @@ export interface ImportResultSummary {
   notes: number;
   linkTags: number;
   noteLinks: number;
+  /** Rows the file offered that were already here, and were merged into. */
+  mergedFolders: number;
+  mergedLinks: number;
+  mergedNotes: number;
+  mergedTags: number;
+  /** Notes kept alongside a same-titled note here because the bodies differ. */
+  ambiguousNotes: number;
   /** Where the pre-restore safety copy was stored, when one could be written. */
   emergencyPath: string | null;
   keyringReplaced: boolean;
@@ -276,6 +283,14 @@ export const useBackupStore = create<BackupState>((set, get) => {
         result: {
           mode: plan.mode,
           ...outcome.written,
+          mergedFolders: outcome.merged.folders,
+          mergedLinks: outcome.merged.links,
+          mergedNotes: outcome.merged.notes,
+          mergedTags: outcome.merged.tags,
+          // Read from the plan rather than from the outcome: nothing about the
+          // merge outcome changes because a note was preserved beside another,
+          // and the plan is where that decision was made.
+          ambiguousNotes: plan.ambiguousNotes,
           emergencyPath,
           keyringReplaced: outcome.keyringReplaced,
         },

@@ -5,13 +5,7 @@ import { createFolder, setFolderLocked } from '@/db/repos/folders';
 import { createLink } from '@/db/repos/links';
 import { createStaticAuthenticator, setDeviceAuthenticator } from '@/lib/privacy/auth';
 import { encryptJson } from '@/lib/privacy/crypto';
-import {
-  createKeyring,
-  enableDeviceUnlock,
-  forgetVaultKey,
-  getVaultKey,
-  isSessionLocked,
-} from '@/lib/privacy/keyring';
+import { forgetVaultKey, getVaultKey, isSessionLocked } from '@/lib/privacy/keyring';
 import { isSealed } from '@/lib/privacy/protection';
 import type { SecureStore } from '@/lib/privacy/secure-store';
 import { setSecureStore } from '@/lib/privacy/secure-store';
@@ -21,6 +15,7 @@ import { parseShare } from '@/lib/share/parse';
 import { useCaptureStore } from '@/stores/capture-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { useVaultStore } from '@/stores/vault-store';
+import { armDeviceWrap, setupLegacyPasscodeVault } from './privacy-fixtures';
 
 /**
  * Locking is per folder, and it is an access decision.
@@ -77,10 +72,12 @@ beforeEach(async () => {
   useCaptureStore.setState({ ...PRISTINE_CAPTURE }, true);
   setSecureStore(memorySecureStore());
   setDeviceAuthenticator(createStaticAuthenticator({ ok: true }, { available: true }));
-  // A passcode-only keyring: the vault key is present from here on, and there is
-  // no device wrap to answer with. So `requestAccess` cannot fast-path — it either
-  // finds the boundary already open or queues the gate.
-  await createKeyring(PASSCODE);
+  // A vault whose only wrap is the passcode an earlier build asked for: the vault
+  // key is present from here on, and there is no device wrap to answer with. So
+  // `requestAccess` cannot fast-path — it either finds the boundary already open
+  // or queues the gate, which is the state every scenario below is written for.
+  // The tests that need a prompt to answer call `armDeviceWrap()` first.
+  await setupLegacyPasscodeVault(PASSCODE);
 });
 
 async function mustFolder(name: string, parentId: string | null = null): Promise<string> {
@@ -175,7 +172,7 @@ describe('C: crossing the boundary', () => {
     await view();
 
     // A device path this time, so the prompt can answer for it.
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
     expect(await requireFolderAccess(privateId)).toBe(true);
 
     const state = useVaultStore.getState();
@@ -196,7 +193,7 @@ describe('C: crossing the boundary', () => {
     await setFolderLocked(privateId, true);
     await setFolderLocked(bankingId, true);
     await view();
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
 
     expect(await requireFolderAccess(privateId)).toBe(true);
     const state = useVaultStore.getState();
@@ -217,7 +214,7 @@ describe('C: crossing the boundary', () => {
     const privateId = await mustFolder('Private');
     await setFolderLocked(privateId, true);
     await view();
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
     expect(await requireFolderAccess(privateId)).toBe(true);
 
     usePrivacyStore.getState().handleBackground();
@@ -291,7 +288,7 @@ describe('D and E: sharing', () => {
     expect(useCaptureStore.getState().destination.kind).toBe('inbox');
 
     // Answering it saves into the folder that was asked for.
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
     expect(await requireFolderAccess(privateId)).toBe(true);
     expect(await useCaptureStore.getState().chooseDestination({ kind: 'folder', folderId: privateId })).toBe(true);
     const outcome = await useCaptureStore.getState().save();
@@ -341,7 +338,7 @@ describe('F and G: search', () => {
     const linkId = await mustLink('https://secret.example/lawyer', privateId);
     await setFolderLocked(privateId, true);
     await view();
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
     expect(await requireFolderAccess(privateId)).toBe(true);
 
     const state = useVaultStore.getState();
@@ -366,7 +363,7 @@ describe('migration: a vault written by an earlier build', () => {
     // No schema change, no version bump and no data reset: unlocking is the point
     // a key exists, so it is the point the reconciliation runs, and the old
     // ciphertext is rewritten as an ordinary readable name.
-    expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
+    expect((await usePrivacyStore.getState().unlockWithLegacyPasscode(PASSCODE)).ok).toBe(true);
 
     const settled = await db.folders.get(id);
     expect(isSealed(settled ?? {})).toBe(false);
@@ -384,7 +381,7 @@ describe('migration: a vault written by an earlier build', () => {
     const raw = await db.folders.get(id);
     await db.folders.put({ ...raw!, name: '', enc: await encryptJson(getVaultKey()!, { name: 'Private' }) });
 
-    expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
+    expect((await usePrivacyStore.getState().unlockWithLegacyPasscode(PASSCODE)).ok).toBe(true);
 
     const settled = await db.folders.get(id);
     expect(settled?.name).toBe('Private');

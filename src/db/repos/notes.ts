@@ -219,9 +219,6 @@ export async function setNoteFavorite(id: string, isFavorite: boolean): Promise<
   await db.notes.update(id, { isFavorite, updatedAt: Date.now() });
 }
 
-export async function setNoteArchived(id: string, isArchived: boolean): Promise<void> {
-  await db.notes.update(id, { isArchived, updatedAt: Date.now() });
-}
 
 /**
  * Lock or unlock one note.

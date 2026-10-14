@@ -151,3 +151,68 @@ export async function countSealed(): Promise<{ folders: number; notes: number; l
     links: links.filter(isSealed).length,
   };
 }
+
+/**
+ * How many rows carry a lock flag — directly, not through an ancestor.
+ *
+ * Distinct from {@link countSealed}, and the difference is the point. Sealing is
+ * *derived* from the flags on every reconciliation, so the two only disagree when
+ * something has gone wrong — most importantly when the vault key is missing, in
+ * which case flags exist and content is ciphertext. The rule for a device with no
+ * screen lock reads both, because removing a flag it cannot stand behind is safe
+ * only once the plaintext is back.
+ */
+export async function countLocks(): Promise<{ folders: number; notes: number; links: number }> {
+  const [folders, notes, links] = await Promise.all([
+    db.folders.toArray(),
+    db.notes.toArray(),
+    db.links.toArray(),
+  ]);
+  return {
+    folders: folders.filter((row) => row.isLocked === true).length,
+    notes: notes.filter((row) => row.isLocked === true).length,
+    links: links.filter((row) => row.isLocked === true).length,
+  };
+}
+
+/**
+ * Clear every lock flag, reporting how many were actually cleared.
+ *
+ * The one caller is the policy for a device with no screen lock, and the ordering
+ * it relies on is enforced there rather than here: this runs *after* the content
+ * has been unsealed. Clearing a flag while its row is still ciphertext would take
+ * away the only record that the row is locked and leave its content unreadable —
+ * no longer protected, still unreachable, which is the worst of both.
+ *
+ * Unlocking is not deleted data: the row keeps its id, its place, its content and
+ * its timestamps, and becomes ordinary readable content again.
+ */
+export async function clearEveryLock(): Promise<{ folders: number; notes: number; links: number }> {
+  const [folders, notes, links] = await Promise.all([
+    db.folders.toArray(),
+    db.notes.toArray(),
+    db.links.toArray(),
+  ]);
+
+  const counts = { folders: 0, notes: 0, links: 0 };
+  const writes: Array<Promise<unknown>> = [];
+
+  for (const folder of folders) {
+    if (folder.isLocked !== true) continue;
+    counts.folders += 1;
+    writes.push(db.folders.put({ ...folder, isLocked: false }));
+  }
+  for (const note of notes) {
+    if (note.isLocked !== true) continue;
+    counts.notes += 1;
+    writes.push(db.notes.put({ ...note, isLocked: false }));
+  }
+  for (const link of links) {
+    if (link.isLocked !== true) continue;
+    counts.links += 1;
+    writes.push(db.links.put({ ...link, isLocked: false }));
+  }
+
+  await Promise.all(writes);
+  return counts;
+}

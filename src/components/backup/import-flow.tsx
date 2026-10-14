@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { CheckCircle2, FileJson, Info, Loader2, ShieldAlert } from '@/components/ui/icons';
 import { useBackupStore } from '@/stores/backup-store';
-import { planTotal } from '@/lib/backup/merge';
+import { planMerged, planTotal } from '@/lib/backup/merge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -239,11 +239,13 @@ function ReviewView() {
                 <li>{plan.counts.folders} folder(s), {plan.counts.links} link(s), {plan.counts.notes} note(s)</li>
                 <li>{plan.counts.tags} tag(s), {plan.counts.linkTags + plan.counts.noteLinks} reference(s)</li>
               </ul>
-              {plan.skipped.folders + plan.skipped.links + plan.skipped.notes + plan.skipped.tags > 0 ? (
-                <p className="mt-1.5 text-meta leading-relaxed text-subtle">
-                  {plan.skipped.folders + plan.skipped.links + plan.skipped.notes + plan.skipped.tags} item(s)
-                  already exist here and are skipped rather than overwritten.
-                </p>
+              {planMerged(plan) > 0 ? (
+                <ul className="mt-1.5 flex flex-col gap-0.5 text-meta text-muted">
+                  <li>
+                    {plan.merged.folders} folder(s), {plan.merged.links} link(s), {plan.merged.notes} note(s) merged into
+                    what is already here
+                  </li>
+                </ul>
               ) : null}
               {plan.messages.map((planMessage) => (
                 <p key={planMessage} className="mt-1.5 text-meta leading-relaxed text-subtle">
@@ -363,6 +365,20 @@ function DoneView({ onClose }: { onClose: () => void }) {
                 <CountCell label="Tag links" value={result.linkTags} />
                 <CountCell label="Note refs" value={result.noteLinks} />
               </div>
+
+              {result.mergedFolders + result.mergedLinks + result.mergedNotes > 0 ? (
+                <p className="text-meta leading-relaxed text-muted">
+                  {result.mergedFolders} folder(s), {result.mergedLinks} link(s) and {result.mergedNotes} note(s) were
+                  recognized as already here and merged rather than duplicated.
+                </p>
+              ) : null}
+
+              {result.ambiguousNotes > 0 ? (
+                <Notice tone="neutral">
+                  {result.ambiguousNotes} note(s) shared a title with a note you already had but say something
+                  different, so both were kept. Nothing was merged or discarded.
+                </Notice>
+              ) : null}
 
               {result.keyringReplaced ? (
                 <Notice tone="warn">

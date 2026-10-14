@@ -208,21 +208,20 @@ export async function setLinkFavorite(id: string, isFavorite: boolean): Promise<
 }
 
 /**
- * Legacy field write. **Nothing in the app calls this any more.**
+ * The `isArchived` column is legacy, and there is no writer.
  *
  * Archiving used to hide a link from every screen the user had, which made it
- * indistinguishable from losing it. The UI is gone and version 6 of the database
- * restored every archived row, so there is no longer a state to set.
+ * indistinguishable from losing it. The feature is gone, version 6 of the
+ * database restored every archived row, and nothing reads the field — so there
+ * is no longer a state to set, and no function here sets it. Removing the setter
+ * as well as the UI is deliberate: a writer left behind is exactly how a removed
+ * feature comes back, one call site at a time.
  *
- * It is kept only because the field still exists on the row — a backup written by
- * an older build carries it and has to import cleanly, and a test needs to be
- * able to *create* the state this app had to migrate away from. Do not call it
- * from a component or a store: if a future feature needs to hide a link, it needs
- * a way back that is not a filter chip on another screen.
+ * The field itself stays on the row because a backup written by an older build
+ * carries it and has to import cleanly. The migration test sets it by writing
+ * the column directly, which is the only way anything can now: through a database
+ * that predates this build.
  */
-export async function setLinkArchived(id: string, isArchived: boolean): Promise<void> {
-  await db.links.update(id, { isArchived, updatedAt: Date.now() });
-}
 
 export async function touchLinkOpened(id: string): Promise<void> {
   await db.links.update(id, { lastOpenedAt: Date.now() });

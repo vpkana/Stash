@@ -14,12 +14,17 @@ import { decryptBackupPayload } from '@/lib/backup/envelope';
 import { indexExisting, planImport, type ImportMode } from '@/lib/backup/merge';
 import { parseBackup, type ParseResult } from '@/lib/backup/validate';
 import { createFolder, setFolderFavorite, setFolderLocked } from '@/db/repos/folders';
-import { createLink, moveLink, setLinkArchived, setLinkFavorite } from '@/db/repos/links';
+import { createLink, moveLink, setLinkFavorite } from '@/db/repos/links';
 import { createNote, setNoteFavorite, setNoteLocked } from '@/db/repos/notes';
 import { setLinkTags } from '@/db/repos/tags';
-import { createKeyring, forgetVaultKey, hasKeyring, unlockWithPasscode } from '@/lib/privacy/keyring';
+import { createStaticAuthenticator, setDeviceAuthenticator } from '@/lib/privacy/auth';
+import { forgetVaultKey, hasKeyring } from '@/lib/privacy/keyring';
+import { setSecureStore } from '@/lib/privacy/secure-store';
 import { getSnapshot } from '@/db/repos/vault';
 import { isSealed } from '@/lib/privacy/protection';
+import { hasLegacyPasscodeWrap } from '@/lib/privacy/legacy-passcode';
+import { usePrivacyStore } from '@/stores/privacy-store';
+import { memorySecureStore, setupLegacyPasscodeVault } from './privacy-fixtures';
 
 /**
  * Backup and restore, end to end, over a real Dexie database.
@@ -140,7 +145,10 @@ async function populate(options: { withLocks?: boolean } = {}): Promise<void> {
 
   // Favourites and archive state are ordinary columns, so they must survive.
   await setLinkFavorite(a, true);
-  await setLinkArchived(d, true);
+  // The archive flag is written directly, because the app no longer has any way
+  // to set it: this is what a row carried over from a build that did looks like,
+  // and a backup has to carry it faithfully for an older reader.
+  await db.links.update(d, { isArchived: true });
   await setNoteFavorite(notes, true);
   await setFolderFavorite(development, true);
 
@@ -184,6 +192,8 @@ async function importText(text: string, mode: ImportMode) {
 beforeEach(async () => {
   await resetDatabase();
   forgetVaultKey();
+  // A vault key has to be wrappable for the setup paths below to run at all.
+  setSecureStore(memorySecureStore());
 });
 
 describe('export, uninstall, import', () => {
@@ -221,7 +231,7 @@ describe('export, uninstall, import', () => {
   });
 
   it('reproduces the vault through a fully readable file, and re-locks what was locked', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     await populate({ withLocks: true });
     const before = await structure();
 
@@ -320,7 +330,7 @@ describe('an empty backup', () => {
 
 describe('locked content', () => {
   it('keeps locked items encrypted in a sealed export, and readable after a restore', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     const personal = await mustFolder('Personal');
     const nested = await mustFolder('Settlement', personal);
     const secret = await mustLink('https://secret.example.com/divorce', nested, 'Settlement');
@@ -364,10 +374,14 @@ describe('locked content', () => {
     expect(isSealed(sealedBefore.links.find((row) => row.id === secret) ?? {})).toBe(true);
     expect(sealedBefore.notes.find((row) => row.id === privateNote)?.title).toBe('');
 
-    // The original passcode opens the restored vault.
+    // The passcode the owner already knew opens the restored vault, and converts
+    // it — the product's path for a file written by that build, on a device whose
+    // own lock works, which the migration requires before it will drop the only
+    // other way in.
+    setDeviceAuthenticator(createStaticAuthenticator({ ok: true }));
     forgetVaultKey();
-    const key = await unlockWithPasscode(PASSCODE);
-    expect(key).not.toBeNull();
+    expect((await usePrivacyStore.getState().unlockWithLegacyPasscode(PASSCODE)).ok).toBe(true);
+    expect(await hasLegacyPasscodeWrap()).toBe(false);
 
     const snapshot = await getSnapshot();
     expect(snapshot.folders.find((row) => row.id === personal)?.name).toBe('Personal');
@@ -382,7 +396,7 @@ describe('locked content', () => {
   });
 
   it('writes locked items out in the clear only when the user chooses a readable export, and says so', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     const personal = await mustFolder('Personal');
     await setFolderLocked(personal, true);
     await mustLink('https://secret.example.com/x', personal);
@@ -402,7 +416,7 @@ describe('locked content', () => {
   });
 
   it('refuses a readable export while the session is locked, rather than shipping ciphertext', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     const personal = await mustFolder('Personal');
     await mustLink('https://secret.example.com/hidden', personal);
     await setFolderLocked(personal, true);
@@ -414,7 +428,7 @@ describe('locked content', () => {
   });
 
   it('will not open an encrypted backup with the wrong passphrase', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     await mustFolder('Personal');
     const built = await build('encrypted');
 
@@ -433,7 +447,7 @@ describe('locked content', () => {
   });
 
   it('reports locked items honestly when the file has no key for them', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     const personal = await mustFolder('Personal');
     await setFolderLocked(personal, true);
     await mustLink('https://secret.example.com/x', personal);
@@ -453,7 +467,7 @@ describe('locked content', () => {
   });
 
   it('keeps the device key role out of the file entirely', async () => {
-    await createKeyring(PASSCODE);
+    await setupLegacyPasscodeVault(PASSCODE);
     await mustNote('Anything', 'Body');
     const built = await build('sealed');
     // The device-bound wrap only means something on this phone, so it is not

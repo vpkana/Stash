@@ -16,7 +16,6 @@ import {
 import type { Note, NoteDeletionImpact } from '@/db/types';
 import { pluralize } from '@/lib/format';
 import { useBackDismiss } from '@/hooks/use-back-dismiss';
-import { useRouter } from 'next/navigation';
 import { useVaultStore, selectChildNotes, selectDescendantNoteCount } from '@/stores/vault-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { ActionList, ActionRow } from '@/components/ui/action-list';
@@ -47,10 +46,9 @@ export interface NoteActionsSheetProps {
 }
 
 export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteActionsSheetProps) {
-  const router = useRouter();
   const notes = useVaultStore((state) => state.notes);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
-  const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
+  const ensureLocking = usePrivacyStore((state) => state.ensureLocking);
   const protectedId = note?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.notes.has(protectedId));
   const [mode, setMode] = React.useState<Mode>('actions');
@@ -316,40 +314,32 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
                       : 'Lock this note and its subnotes'
                 }
                 onClick={() => {
-                  if (!keyringPresent) {
-                    toast('Turn on locking first', { tone: 'danger' });
-                    close();
-                    router.push('/settings');
-                    return;
-                  }
-                  // See the folder sheet: a passcode has to exist before anything
-                  // new is locked, so the device prompt is never the only key.
-                  if (!passcodeSet) {
-                    toast('Set a passcode first, so this note can never become unreachable', {
-                      tone: 'danger',
-                    });
-                    close();
-                    router.push('/settings');
-                    return;
-                  }
                   if (isProtected && !note.isLocked) {
                     toast('A subnote of a locked note inherits its lock. Unlock the parent note instead.');
                     return;
                   }
                   const next = !note.isLocked;
-                  void useVaultStore.getState().toggleNoteLocked(note.id).then(() => {
+                  close();
+                  // See the folder sheet: locking the first item is what turns
+                  // locking on, and a device with no screen lock says so instead.
+                  void (async () => {
+                    const ready = await ensureLocking();
+                    if (!ready.ok) {
+                      toast(ready.message ?? 'Locking is unavailable on this device', { tone: 'danger' });
+                      return;
+                    }
+                    await useVaultStore.getState().toggleNoteLocked(note.id);
                     toast(
                       next ? 'Locked — title and body are now encrypted' : 'Unlocked',
                       { tone: 'success' },
                     );
-                  });
-                  close();
+                  })();
                 }}
               />
               {!keyringPresent ? (
                 <p className="px-2 pt-1 text-meta leading-relaxed text-subtle">
-                  Locking encrypts a note and its subnotes so they are unreadable while Stash is locked. Turn it on
-                  in Settings with your device lock.
+                  Locking encrypts a note and its subnotes so they are unreadable while Stash is locked. It opens
+                  with your device lock — fingerprint, face, PIN, pattern or password.
                 </p>
               ) : null}
               {resourceCount > 0 ? (

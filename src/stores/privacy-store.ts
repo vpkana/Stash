@@ -3,26 +3,22 @@
 import { create } from 'zustand';
 import { DEFAULT_PRIVACY_SETTINGS, type PrivacySettings } from '@/db/types';
 import { getPrivacySettings, setPrivacySettings } from '@/db/repos/settings';
-import { getDeviceAuthenticator } from '@/lib/privacy/auth';
+import { getDeviceAuthenticator, type DeviceSecurity } from '@/lib/privacy/auth';
 import {
-  createKeyring,
+  adoptVaultKeyForDevice,
+  createDeviceKeyring,
   destroyKeyring,
-  disableDeviceUnlock,
-  enableDeviceUnlock,
+  dropLegacyPasscodeWrap,
+  ensureDeviceCredential,
   forgetVaultKey,
   hasKeyring,
-  hasPasscodeWrap,
   isDeviceUnlockReady,
   isSessionLocked,
-  MIN_PASSCODE_LENGTH,
-  MIN_PASSCODE_MESSAGE,
-  removePasscodeWrap,
-  setPasscodeWrap,
   unlockWithDevice,
-  unlockWithPasscode,
 } from '@/lib/privacy/keyring';
+import { hasLegacyPasscodeWrap, openWithLegacyPasscode } from '@/lib/privacy/legacy-passcode';
 import { getSecureStore } from '@/lib/privacy/secure-store';
-import { reconcileProtection as reconcile, unsealEverything } from '@/lib/privacy/reconcile';
+import { clearEveryLock, countLocks, countSealed, reconcileProtection as reconcile, unsealEverything } from '@/lib/privacy/reconcile';
 import { applyScreenPrivacy } from '@/lib/privacy/screen';
 import { shouldLockOnTabChange, shouldRelock } from '@/lib/privacy/session';
 
@@ -37,28 +33,33 @@ import { shouldLockOnTabChange, shouldRelock } from '@/lib/privacy/session';
  * is always `isSessionLocked()`.
  *
  * Stash has no lock screen over the app. The app always opens, and nothing in it
- * is gated: what is protected is *content*, and the only things that ever ask for
- * a credential are crossing into a protected folder and the deliberate
- * "open everything" action in Settings. Launching, browsing Home, searching,
- * saving a link or arriving from the Android share sheet all happen with no
- * prompt at all, however many locked folders the vault contains.
+ * is gated: what is protected is *content*, and the only thing that ever asks for
+ * a credential is crossing into a protected folder or item. Launching, browsing
+ * Home, searching, saving a link or arriving from the Android share sheet all
+ * happen with no prompt at all, however many locked folders the vault contains.
  *
- * ## Two ways in, and the passcode is the one that cannot be taken away
+ * ## One way in, and the device owns it
  *
- * A vault is opened by a **passcode** and, when the device can prompt, by the
- * **device unlock** as well. Both are wraps of the same vault key, so either one
- * opens the vault; neither is required for the other to work.
+ * A locked item is opened by the operating system, not by Stash. There is no
+ * passcode, no hash, no verifier and no second secret anywhere in the app: the
+ * prompt is `BiometricPrompt` (or Windows Hello on a desktop) configured with
+ * `allowDeviceCredential`, which is what gives the person a fingerprint or face
+ * **and** a button for their own screen-lock credential inside one system dialog
+ * — including when biometrics are enrolled and they would rather type their PIN.
+ * See `auth.ts`, which documents that choice and the plugin constraints behind it.
  *
- * The passcode is the primary because it is the only one that survives the user's
- * own settings. A device key is held by the operating system, and the OS can
- * withdraw it: a fingerprint is removed, a screen lock is turned off, an
- * enrollment is invalidated by a platform update. When that was the *only* way in,
- * turning a biometric switch off locked someone out of their own folders — a
- * settings change that destroyed access. It cannot happen now: switching the
- * device prompt off removes a wrap and leaves the passcode exactly as it was.
+ * ## The rule for a device with no screen lock
  *
- * `grantedRoots` is the access model, and it is per folder. Passing the prompt
- * for `Private` opens `Private` and its descendants and leaves every other locked
+ * A lock Stash cannot enforce is worse than no lock: it hides content behind a
+ * prompt that will never appear, so an unrecoverable lockout is one settings
+ * change away. So on every app open the app asks the platform whether this device
+ * has any kind of screen lock at all — fingerprint, face, PIN, pattern or
+ * password, as opposed to none — and when the answer is no, it *removes* the
+ * locks it can no longer stand behind, unsealing their content first so nothing
+ * is stranded, and says so. {@link enforceDeviceSecurity} is that policy.
+ *
+ * `grantedRoots` is the access model, and it is per item. Passing the prompt for
+ * `Private` opens `Private` and its descendants and leaves every other locked
  * folder exactly as closed as it was. The vault key is one key — so the seal is
  * all-or-nothing at rest — but *access* is decided one boundary at a time, which
  * is what makes the lock a property of a folder rather than of the app.
@@ -99,24 +100,48 @@ export interface AccessRequest {
   root: string | null;
 }
 
+/**
+ * The message shown after the app removes locks a device can no longer enforce.
+ *
+ * `removed` is the outcome the policy is designed to reach, and it is not the
+ * only possible one, which is why this is a description rather than a sentence.
+ * `blocked` means there was locked content on a device with no screen lock and no
+ * device key that could open it — the one case where removing the locks would
+ * destroy the content behind them, so the app keeps the locks and asks for the
+ * legacy passcode once instead. Both are reported honestly; neither is silent.
+ */
+export interface NoScreenLockNotice {
+  outcome: 'removed' | 'blocked';
+  /** Lock flags that were cleared. */
+  locksCleared: { folders: number; notes: number; links: number };
+  /** Sealed rows whose content was decrypted back into the clear. */
+  opened: { folders: number; notes: number; links: number };
+  /** Rows that could not be opened. Non-zero only on `blocked`, and never lost. */
+  unreadable: number;
+}
+
 export interface PrivacyState {
   ready: boolean;
   settings: PrivacySettings;
-  /** True once a keyring row exists, i.e. privacy has been set up. */
+  /** True once a keyring row exists, i.e. locking has been set up. */
   keyringPresent: boolean;
   /**
-   * Whether a Stash passcode exists. `false` on a vault set up with the device
-   * lock alone, which is a supported setup: the system prompt is the way in and
-   * there is nothing to type. The UI says what that costs before it is chosen.
+   * True when this vault can be opened by one thing only: the passcode an earlier
+   * build asked for. Not a state the app can enter — see `legacy-passcode.ts` —
+   * only one it can be found in, and the gate offers to convert it.
    */
-  passcodeSet: boolean;
+  legacyPasscodeOnly: boolean;
   /** Where the device key lives, so the copy can be specific rather than vague. */
   deviceStoreKind: DeviceStoreKind;
   unlocked: boolean;
   /** Whether this device can prompt for biometric or device-credential auth. */
   deviceAuthAvailable: boolean;
-  /** Whether the biometric fast path is armed and its device key is present. */
+  /** Whether the device wrap is in place and its key is present here. */
   deviceUnlockReady: boolean;
+  /** What this device's own screen lock amounts to. See `enforceDeviceSecurity`. */
+  deviceSecurity: DeviceSecurity;
+  /** The removal that the last app-open check performed, if it performed one. */
+  noScreenLockNotice: NoScreenLockNotice | null;
   /** When the app went to the background, for the re-lock policy. */
   backgroundedAt: number | null;
   /**
@@ -127,9 +152,9 @@ export interface PrivacyState {
    */
   unlockedAt: number | null;
   /**
-   * Which locked folders have been opened in this session.
+   * Which locked boundaries have been opened in this session.
    *
-   * This is the whole of Stash's access model, and it is deliberately a *set*:
+   * That is the whole of Stash's access model, and it is deliberately a *set*:
    * passing the prompt for `Private` opens `Private` and everything inside it,
    * and leaves `Banking` — a different locked folder — exactly as closed as it
    * was. There is no app-wide unlock, so a locked folder somewhere in the vault
@@ -143,7 +168,7 @@ export interface PrivacyState {
   /**
    * Something the user tapped while it was locked.
    *
-   * Set by `requestReveal` so the gate can be raised for *this* reason — "open
+   * Set by `requestAccess` so the gate can be raised for *this* reason — "open
    * the locked thing you tapped" — even when locking is configured not to cover
    * the whole app, which is the case where nothing else would prompt.
    */
@@ -159,60 +184,53 @@ export interface PrivacyState {
   /** Re-read capabilities after they could have changed (resume, settings). */
   refreshCapabilities: () => Promise<void>;
   /**
-   * Set up locking, starting with a passcode.
+   * Turn locking on.
    *
-   * A passcode first, because it is the wrap that cannot be withdrawn by the
-   * platform — see the module note. The device prompt is armed afterwards, from
-   * its own switch, which means a device that cannot prompt can still be locked
-   * properly instead of being told locking is unavailable.
+   * There is nothing to choose: a 256-bit key goes into this device's secure
+   * storage and the vault key is wrapped under it. Refuses when this device has
+   * no screen lock at all, because a lock created there could never be opened —
+   * the one moment where saying no is the kind thing.
    */
-  createWithPasscode: (passcode: string) => Promise<ActionResult>;
-  /** Add or replace the passcode wrap. Requires an unlocked session. */
-  setPasscode: (passcode: string) => Promise<ActionResult>;
+  enableLocking: () => Promise<ActionResult>;
+  /**
+   * Make sure locking exists, for the first time something is locked.
+   *
+   * Idempotent, and deliberately separate from {@link enableLocking}: that one is
+   * the settings switch and refuses when locking is already on, because a silent
+   * second setup would replace a key in use. This one is what the "Lock this
+   * folder" action calls, where the user has expressed no interest in the
+   * mechanics — if locking is already set up it does nothing at all, and if it is
+   * not, the folder they just asked to lock is the reason to set it up.
+   */
+  ensureLocking: () => Promise<ActionResult>;
+  /**
+   * Convert a vault that an earlier build locked with a Stash passcode.
+   *
+   * The passcode is used once to unwrap the vault key, which is immediately
+   * re-wrapped for this device and has its passcode wrap deleted. Afterwards the
+   * passcode does nothing and is never asked for again. Present because deleting
+   * the reader would have made that content permanently unreadable, not because
+   * there is a password system: no screen in the app can create a passcode.
+   */
+  unlockWithLegacyPasscode: (passcode: string) => Promise<ActionResult>;
   /**
    * Prove that the person at the device may act, before anything irreversible.
    *
-   * One function, because there is one question — "is this the owner?" — and two
-   * ways to answer it. The device prompt is tried first when it is armed (nothing
-   * to type), and a typed passcode answers it otherwise. A *cancelled* prompt is
-   * deliberately not the end of the attempt: it falls through to the passcode
-   * field, because a stray tap on the system dialog must not be the last word.
-   *
-   * `passcode` may be empty when the caller knows the device path will answer; a
-   * vault with no passcode wrap simply has nothing for it to check.
+   * One function, because there is one question — "is this the owner?" — and one
+   * way to answer it: the system prompt. A vault this device cannot prompt for is
+   * a vault whose destructive actions cannot be authorised here, and the answer
+   * says so rather than offering a weaker substitute.
    */
-  authorize: (passcode: string, reason: string) => Promise<ActionResult>;
+  authorize: (reason: string) => Promise<ActionResult>;
   /**
-   * Replace the passcode, having proved the current way in first.
+   * End locking: opens every sealed row, then removes the keyring.
    *
-   * The old passcode is **not** the only accepted proof: a successful device
-   * prompt does just as well, which is what makes "change my passcode" possible
-   * on a phone whose passcode was long forgotten but whose fingerprint still
-   * works. Either way the vault key is what is re-wrapped, so nothing already
-   * encrypted changes and no data is at risk at any point.
+   * A change to the vault, so the caller must have authorised it. Distinct from
+   * `abandonLock`, and the distinction is the whole point: this one preserves the
+   * content and removes the protection, while that one removes the protection by
+   * destroying the content.
    */
-  changePasscode: (current: string, next: string) => Promise<ActionResult>;
-  /**
-   * Remove the passcode wrap, having proved the current passcode first.
-   *
-   * Refuses when the device prompt is not armed, because a keyring with no wrap
-   * at all is a vault nothing can open.
-   */
-  removePasscode: (passcode: string) => Promise<ActionResult>;
-  /**
-   * Turn privacy off: opens everything, then removes the keyring. The device
-   * prompt authorises it; `passcode` is read only on a vault created by an older
-   * build whose only wrap was a passcode.
-   */
-  disable: (passcode: string) => Promise<ActionResult>;
-  /**
-   * Open a vault with a passcode.
-   *
-   * The passcode is the primary way in — the one wrap the operating system
-   * cannot withdraw — and this is also the path a vault created by an earlier
-   * build uses, where the passcode wrap is the only thing that can open it.
-   */
-  unlock: (passcode: string) => Promise<ActionResult>;
+  disable: () => Promise<ActionResult>;
   /**
    * Pass the system prompt and open one lock boundary.
    *
@@ -232,11 +250,10 @@ export interface PrivacyState {
   /**
    * Open every lock boundary at once, for this session only.
    *
-   * The deliberate, authenticated "open everything" — the replacement for the
-   * unauthenticated recovery action that used to exist. It takes the roots to
-   * grant from the caller so nothing here has to know about the vault's shape,
-   * and it changes **no configuration**: no lock flag is cleared, no keyring is
-   * touched, no sealed row is rewritten. Leaving the screen, switching tabs or
+   * The deliberate, authenticated "open everything". It takes the roots to grant
+   * from the caller so nothing here has to know about the vault's shape, and it
+   * changes **no configuration**: no lock flag is cleared, no keyring is touched,
+   * no sealed row is rewritten. Leaving the screen, switching tabs or
    * backgrounding the app ends it exactly like any other unlock.
    *
    * It is not a bypass: the caller must have authenticated first, and the
@@ -244,7 +261,7 @@ export interface PrivacyState {
    * not get by opening each locked folder in turn.
    */
   grantAll: (roots: readonly string[]) => void;
-  /** End every folder access at once. Called on lock, tab change and background. */
+  /** End every open boundary at once. Called on lock, tab change and background. */
   clearGrants: () => void;
   /** Bring the database's encryption back in step with the lock flags. */
   reconcile: () => Promise<void>;
@@ -262,6 +279,22 @@ export interface PrivacyState {
   /** Returns true when the policy expired the session on the way back in. */
   handleForeground: (now?: number) => boolean;
   /**
+   * The rule for a device with no screen lock: remove what cannot be enforced.
+   *
+   * Run on every app open and on every return to the foreground. When the device
+   * has no screen lock of any kind, locks and sealed content are unsealed and
+   * released, and the outcome is published in {@link noScreenLockNotice} for the
+   * UI to explain. Unsealing first is what makes this safe: the only failure that
+   * matters — clearing a lock flag for content that is still ciphertext — cannot
+   * happen, because the lock is only cleared after the plaintext is back.
+   *
+   * Never fires on `'unknown'`. A browser cannot see the OS screen lock, and a
+   * failed platform call is not evidence of anything, so neither is allowed to
+   * destroy protection.
+   */
+  enforceDeviceSecurity: () => Promise<void>;
+  dismissNoScreenLockNotice: () => void;
+  /**
    * Destroy the keyring without unsealing anything.
    *
    * The keyring is deleted and anything sealed stays sealed and permanently
@@ -271,23 +304,21 @@ export interface PrivacyState {
    * vault, and no change to the vault is a single unauthenticated tap.
    */
   abandonLock: () => Promise<void>;
-  armBiometrics: () => Promise<ActionResult>;
-  disarmBiometrics: () => Promise<void>;
   update: (patch: Partial<PrivacySettings>) => Promise<void>;
   clearMessage: () => void;
 }
 
 /**
- * The two facts the privacy UI needs to be specific about: is there a passcode,
- * and where does the device key live.
+ * The two facts the privacy UI needs to be specific about: can this vault be
+ * opened here at all, and where does the device key live.
  *
  * Asked as a pair because they are read together and both answer "what would it
- * take to open this vault somewhere else".
+ * take to open this vault".
  */
-async function describeDevicePath(keyring: boolean): Promise<[boolean, DeviceStoreKind]> {
+async function describeKeyring(present: boolean): Promise<[boolean, DeviceStoreKind]> {
   const store = await getSecureStore();
-  if (!keyring) return [false, store.kind];
-  return [await hasPasscodeWrap(), store.kind];
+  if (!present) return [false, store.kind];
+  return [await hasLegacyPasscodeWrap(), store.kind];
 }
 
 /**
@@ -298,11 +329,39 @@ function syncScreenPrivacy(secureWhileUnlocked: boolean, unlocked: boolean): voi
   void applyScreenPrivacy(!unlocked || secureWhileUnlocked);
 }
 
+/**
+ * Open every sealed row, clear every lock flag, and drop the keyring.
+ *
+ * The shared ending of the two situations where a lock has to go: the user asked
+ * for it, and the device cannot enforce it. Same three writes in the same order,
+ * for the same reason — unseal first, so a cleared flag can never point at content
+ * that is still ciphertext — and one implementation, so the two cannot drift into
+ * disagreeing about what "the locks are off" means.
+ *
+ * The counts are returned rather than logged: both callers report them.
+ */
+async function releaseEveryLock(): Promise<{
+  cleared: { folders: number; notes: number; links: number };
+  opened: { folders: number; notes: number; links: number };
+} | null> {
+  const unsealed = await unsealEverything();
+  const still = await countSealed();
+  // Returning before anything is written is the whole safety property of this
+  // function: no flag is cleared and no keyring is destroyed while a row is still
+  // ciphertext, because that combination is a lock that is *gone* while its
+  // content is unreachable — strictly worse than either state on its own.
+  if (still.folders + still.notes + still.links > 0) return null;
+
+  const cleared = await clearEveryLock();
+  await destroyKeyring();
+  return { cleared, opened: unsealed.opened };
+}
+
 export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   ready: false,
   settings: { ...DEFAULT_PRIVACY_SETTINGS },
   keyringPresent: false,
-  passcodeSet: false,
+  legacyPasscodeOnly: false,
   deviceStoreKind: 'unavailable',
   // Starts locked. On a cold start nothing is unlocked until the user says so,
   // which is what makes "after app restart the vault is locked" true by default
@@ -310,6 +369,8 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   unlocked: false,
   deviceAuthAvailable: false,
   deviceUnlockReady: false,
+  deviceSecurity: 'unknown',
+  noScreenLockNotice: null,
   backgroundedAt: null,
   unlockedAt: null,
   grantedRoots: [],
@@ -335,12 +396,10 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
 
     const authenticator = await getDeviceAuthenticator();
     // A capability, not a setting: "this machine could prompt" decides whether
-    // the switch can be offered at all. Reading the `biometric` setting here made
-    // the switch depend on itself — off meant "not available", so it could never
-    // be turned on.
+    // locking can be offered at all.
     const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(keyring);
+    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(keyring);
 
     // With no keyring there is nothing to protect, so the session starts open.
     // With one, it starts locked: a cold start never inherits the last session's
@@ -352,19 +411,24 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       ready: true,
       settings,
       keyringPresent: keyring,
-      passcodeSet,
+      legacyPasscodeOnly,
       deviceStoreKind,
       deviceAuthAvailable,
       deviceUnlockReady,
       unlocked,
       // Nothing was unlocked by a person here: a vault with no keyring starts
       // open because there is nothing to protect, not because it was opened. No
-      // folder has been crossed into either, which is why the grants start empty
+      // boundary has been crossed either, which is why the grants start empty
       // even when the key is present.
       unlockedAt: null,
       grantedRoots: [],
     });
     syncScreenPrivacy(settings.secureScreen, unlocked);
+
+    // Every app open asks whether this device can still enforce a lock. Awaited
+    // rather than fired and forgotten, so the state a screen reads on its first
+    // render is already the post-check one.
+    await get().enforceDeviceSecurity();
   },
 
   reload: async () => {
@@ -377,13 +441,13 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     const authenticator = await getDeviceAuthenticator();
     const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(keyring);
+    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(keyring);
 
     set({
       ready: true,
       settings,
       keyringPresent: keyring,
-      passcodeSet,
+      legacyPasscodeOnly,
       deviceStoreKind,
       deviceAuthAvailable,
       deviceUnlockReady,
@@ -423,122 +487,364 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   refreshCapabilities: async () => {
     const authenticator = await getDeviceAuthenticator();
     const deviceAuthAvailable = await authenticator.isAvailable();
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(get().keyringPresent);
-    set({ deviceAuthAvailable, deviceUnlockReady: await isDeviceUnlockReady(), passcodeSet, deviceStoreKind });
+    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(get().keyringPresent);
+    set({
+      deviceAuthAvailable,
+      deviceUnlockReady: await isDeviceUnlockReady(),
+      legacyPasscodeOnly,
+      deviceStoreKind,
+    });
+    /*
+     * Back from the background: this is the moment a screen lock could have been
+     * removed in Android settings while Stash was in the task switcher, so the
+     * question is asked again.
+     *
+     * Skipped when a notice is already on screen, because a modal that reappears
+     * every time somebody switches apps is not a warning, it is a nuisance — and
+     * the state it describes has not changed since they read it.
+     */
+    if (get().noScreenLockNotice === null) await get().enforceDeviceSecurity();
   },
 
-  createWithPasscode: async (passcode) => {
+  enforceDeviceSecurity: async () => {
+    const authenticator = await getDeviceAuthenticator();
+    const security = await authenticator.security();
+    set({ deviceSecurity: security });
+
+    // `'unknown'` and `'secure'` both mean "leave the locks alone". The first is
+    // a platform that cannot be asked, and acting on it would remove protection
+    // on a machine that may be perfectly well locked.
+    if (security !== 'insecure') return;
+
+    /*
+     * Nothing to enforce a lock against. An installer that failed leaves the
+     * keyring unreadable while the settings row still says locking is on, and in
+     * that case there are no lock flags left to clear either.
+     */
+    const locks = await countLocks();
+    const locksTotal = locks.folders + locks.notes + locks.links;
+    if (!get().keyringPresent && locksTotal === 0) return;
+
+    /*
+     * Open the vault before touching a single lock flag.
+     *
+     * No prompt is attempted — there is no screen lock, so the OS has nothing to
+     * ask with, and calling it would produce a failure that says nothing about
+     * the data. The device key is read directly; on a vault that has one, that is
+     * enough to reach the plaintext.
+     */
+    const key = await unlockWithDevice();
+
+    if (key) {
+      // One pass, and its report is the one that gets published: a second would
+      // find nothing left to open and quietly report zeroes for content it had
+      // just released. `null` means a row would not open, and then nothing at all
+      // has been changed — see `releaseEveryLock`.
+      const released = await releaseEveryLock();
+      if (!released) {
+        const still = await countSealed();
+        set({
+          noScreenLockNotice: {
+            outcome: 'blocked',
+            locksCleared: { folders: 0, notes: 0, links: 0 },
+            opened: { folders: 0, notes: 0, links: 0 },
+            unreadable: still.folders + still.notes + still.links,
+          },
+        });
+        return;
+      }
+
+      const settings = get().settings;
+
+      set({
+        keyringPresent: false,
+        legacyPasscodeOnly: false,
+        deviceUnlockReady: false,
+        unlocked: true,
+        unlockedAt: null,
+        // A fresh array, so the vault's subscription re-reads: the rows that were
+        // hidden a moment ago are ordinary content now, and every listing has to
+        // be told rather than waiting for a navigation.
+        grantedRoots: [],
+        revealRequest: null,
+        message: null,
+        noScreenLockNotice: {
+          outcome: 'removed',
+          locksCleared: released.cleared,
+          opened: released.opened,
+          unreadable: 0,
+        },
+      });
+      syncScreenPrivacy(settings.secureScreen, true);
+      return;
+    }
+
+    /*
+     * No device key, and something is locked or sealed. That combination has
+     * exactly one honest answer: the content is sitting behind a passcode an
+     * earlier build asked for, and this device cannot open it by itself. The
+     * locks are *kept* — removing them here would destroy what they protect — and
+     * the user is asked for that passcode once, which converts the vault and
+     * makes the question go away for good.
+     */
+    set({
+      noScreenLockNotice: {
+        outcome: 'blocked',
+        locksCleared: { folders: 0, notes: 0, links: 0 },
+        opened: { folders: 0, notes: 0, links: 0 },
+        unreadable: locksTotal,
+      },
+    });
+  },
+
+  dismissNoScreenLockNotice: () => set({ noScreenLockNotice: null }),
+
+  enableLocking: async () => {
     set({ busy: true, message: null });
 
-    const result = await createKeyring(passcode);
+    /*
+     * Refused on a device with no screen lock, and this is the guard the whole
+     * policy rests on: a vault wrapped for this device can only be opened by the
+     * device prompt, so creating one where the prompt cannot appear would seal
+     * content behind a door with no handle. Saying no now costs nothing.
+     */
+    const authenticator = await getDeviceAuthenticator();
+    if (!(await authenticator.isAvailable())) {
+      const message =
+        await authenticator.security() === 'insecure'
+          ? 'Add a screen lock to this device first — a PIN, pattern, password, fingerprint or face. Without one, nothing could open a locked item.'
+          : 'This device cannot prompt for an unlock, so locking cannot be set up here.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    const result = await createDeviceKeyring();
     if (!result.ok) {
       set({ busy: false, message: result.message ?? null });
       return { ok: false, message: result.message };
     }
 
-    // The device prompt starts off and is offered as its own switch, so a device
-    // that cannot prompt is never the reason locking is unavailable.
-    const settings = await setPrivacySettings({ enabled: true, biometric: false });
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(true);
+    // On a desktop the prompt is a WebAuthn credential and nothing can be asked
+    // for until one is enrolled, so arming the key includes enrolling it. A
+    // platform that cannot enrol leaves the vault locked with no way in, so it is
+    // undone rather than left half-built.
+    const enrolled = await ensureDeviceCredential();
+    if (!enrolled) {
+      await destroyKeyring();
+      const message = 'This computer could not enrol Windows Hello or a device PIN, so nothing was set up.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    const settings = await setPrivacySettings({ enabled: true, biometric: true });
     set({
       busy: false,
       settings,
       keyringPresent: true,
-      passcodeSet,
-      deviceStoreKind,
-      deviceUnlockReady: false,
+      legacyPasscodeOnly: false,
+      deviceUnlockReady: true,
       unlocked: true,
       unlockedAt: Date.now(),
       message: null,
     });
     syncScreenPrivacy(settings.secureScreen, true);
-    // Re-read the device capabilities now that a keyring exists: whether this
-    // machine can prompt is a fact about the machine, and the settings screen has
-    // to be able to offer the switch the moment locking is on — not one reload
-    // later.
     await get().refreshCapabilities();
     return { ok: true };
   },
 
-  setPasscode: async (passcode) => {
-    if (passcode.length < MIN_PASSCODE_LENGTH) {
-      return { ok: false, message: MIN_PASSCODE_MESSAGE };
-    }
-    const result = await setPasscodeWrap(passcode);
-    if (!result.ok) return { ok: false, message: result.message };
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(true);
-    set({ passcodeSet, deviceStoreKind, message: null });
-    return { ok: true };
+  ensureLocking: async () => {
+    // Asked of the keyring rather than the cached flag: an import can install a
+    // keyring underneath us, and "is there anything to set up" is a fact about
+    // the key, not about the last render.
+    if (get().keyringPresent || (await hasKeyring())) return { ok: true };
+    return get().enableLocking();
   },
 
-  removePasscode: async (passcode) => {
-    set({ busy: true, message: null });
-    // Verified by unwrapping, not by comparing against a stored value — the
-    // AES-GCM tag on the wrapped key is the only verifier there has ever been.
-    const opened = await unlockWithPasscode(passcode);
-    if (!opened) {
-      set({ busy: false, message: 'That passcode did not match.' });
-      return { ok: false, message: 'That passcode did not match.' };
-    }
-    const result = await removePasscodeWrap();
-    if (!result.ok) {
-      set({ busy: false, message: result.message ?? null });
-      return { ok: false, message: result.message };
-    }
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(true);
-    set({ busy: false, passcodeSet, deviceStoreKind, message: null });
-    return { ok: true };
-  },
-
-  disable: async (passcode) => {
+  unlockWithLegacyPasscode: async (passcode) => {
     set({ busy: true, message: null });
 
     /*
-     * Verify first: turning privacy off opens everything, and that must not be
-     * something a passer-by can trigger on an unlocked phone. The device prompt
-     * goes first because it is the only secret the app has left; a passcode is
-     * accepted only as the fallback for a vault whose device key is gone (one
-     * created by an older build, or restored from a backup onto this device).
-     * There is no path where "turn locking off" is a single unauthenticated tap.
+     * Nothing is written until the new way in is known to work.
+     *
+     * The conversion deletes the passcode wrap, so it may only happen on a device
+     * that can actually open the result: a prompt that can be raised, and — on a
+     * desktop — a credential enrolled for it. Checking first is the whole safety
+     * story of this path. Refusing costs nothing, and converting on a device that
+     * cannot prompt would leave content that nothing in the app can reach.
      */
-    let authorised = false;
-
-    if (await isDeviceUnlockReady()) {
-      const authenticator = await getDeviceAuthenticator();
-      const outcome = await authenticator.authenticate('Turn off locking for your Stash vault');
-      if (!outcome.ok) {
-        set({ busy: false, message: outcome.message ?? 'That did not succeed.' });
-        return { ok: false, message: outcome.message };
-      }
-      authorised = Boolean(await unlockWithDevice());
-    }
-
-    if (!authorised && (await hasPasscodeWrap())) {
-      const key = await unlockWithPasscode(passcode);
-      if (!key) {
-        set({ busy: false, message: 'That passcode did not match.' });
-        return { ok: false, message: 'That passcode did not match.' };
-      }
-      authorised = true;
-    }
-
-    if (!authorised) {
-      const message = 'This device can no longer open the vault, so locking cannot be turned off from here.';
+    const key = await openWithLegacyPasscode(passcode);
+    if (!key) {
+      const message = 'That passcode did not match, so nothing was changed.';
       set({ busy: false, message });
       return { ok: false, message };
     }
 
+    const authenticator = await getDeviceAuthenticator();
+    const security = await authenticator.security();
+
+    if (!(await authenticator.isAvailable())) {
+      /*
+       * No way in to convert *to*.
+       *
+       * On a device with no screen lock at all there is nothing the OS could ever
+       * ask for, so the policy for such a device applies directly — and the
+       * passcode has just proved the content belongs to whoever is holding it. The
+       * content is released in full and the locks come off: the one ending that
+       * leaves the user able to read everything and no lock standing that could
+       * never be opened.
+       */
+      if (security === 'insecure') {
+        const released = await releaseEveryLock();
+        const settings = get().settings;
+
+        // A row that would not open: nothing has been changed, and the passcode
+        // still opens everything. Reported rather than forced through.
+        if (!released) {
+          const still = await countSealed();
+          const message =
+            'Some locked items could not be opened, so nothing was changed — your passcode still opens them.';
+          set({
+            busy: false,
+            message,
+            noScreenLockNotice: {
+              outcome: 'blocked',
+              locksCleared: { folders: 0, notes: 0, links: 0 },
+              opened: { folders: 0, notes: 0, links: 0 },
+              unreadable: still.folders + still.notes + still.links,
+            },
+          });
+          return { ok: false, message };
+        }
+
+        set({
+          busy: false,
+          keyringPresent: false,
+          legacyPasscodeOnly: false,
+          deviceUnlockReady: false,
+          unlocked: true,
+          unlockedAt: null,
+          grantedRoots: [],
+          revealRequest: null,
+          message: null,
+          noScreenLockNotice: {
+            outcome: 'removed',
+            locksCleared: released.cleared,
+            opened: released.opened,
+            unreadable: 0,
+          },
+        });
+        syncScreenPrivacy(settings.secureScreen, true);
+        return { ok: true };
+      }
+
+      // A device that *has* a screen lock but cannot raise the prompt here — a
+      // missing desktop credential, a plugin that failed to load. Nothing is
+      // touched, because the passcode is still the only way into these items.
+      const message =
+        'This device cannot ask for an unlock just now, so nothing was changed and your passcode still opens these items.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    // A desktop prompt needs a credential of its own enrolled before it can ask
+    // for anything. Still nothing written: a failure here leaves the vault's only
+    // working way in exactly where it was.
+    if (!(await ensureDeviceCredential())) {
+      const message =
+        'This device could not set up its unlock prompt, so nothing was changed and your passcode still works.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    // One write does the whole conversion: the vault key is wrapped for this
+    // device and the passcode wrap is dropped together, so there is no instant
+    // where the record promises a way in that does not exist.
+    const converted = await adoptVaultKeyForDevice(key);
+    if (!converted.ok) {
+      const message = converted.message ?? 'This device cannot store the key that converts the vault.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    const settings = get().settings;
+    const opened = get().revealRequest?.root ?? null;
+    set({
+      busy: false,
+      legacyPasscodeOnly: false,
+      unlocked: true,
+      unlockedAt: Date.now(),
+      backgroundedAt: null,
+      message: null,
+      revealRequest: null,
+    });
+    if (opened) get().grant(opened);
+    syncScreenPrivacy(settings.secureScreen, true);
+    await get().reconcile();
+    // Asked rather than assumed: `deviceUnlockReady` means the prompt can be
+    // raised *here*, and on a desktop that is a separate fact from the wrap
+    // having been written.
+    await get().refreshCapabilities();
+    return { ok: true };
+  },
+
+  authorize: async (reason) => {
+    set({ busy: true, message: null });
+
+    if (!(await isDeviceUnlockReady())) {
+      const message = 'This device can no longer prompt for an unlock, so this cannot be authorised here.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    const authenticator = await getDeviceAuthenticator();
+    const outcome = await authenticator.authenticate(reason);
+    if (!outcome.ok) {
+      set({ busy: false, message: outcome.message ?? 'That did not succeed.' });
+      return { ok: false, message: outcome.message };
+    }
+
+    const key = await unlockWithDevice();
+    if (!key) {
+      const message = 'The prompt succeeded but this device no longer holds the key for the vault.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+
+    set({ busy: false, unlocked: true, unlockedAt: Date.now(), backgroundedAt: null, message: null });
+    await get().reconcile();
+    return { ok: true };
+  },
+
+  disable: async () => {
+    set({ busy: true, message: null });
+
+    /*
+     * Verify first: turning locking off opens everything, and that must not be
+     * something a passer-by can trigger on an unlocked phone. There is no path
+     * where this is a single unauthenticated tap.
+     */
+    const authorised = await get().authorize('Turn off locking for your Stash vault');
+    if (!authorised.ok) {
+      set({ busy: false, message: authorised.message ?? null });
+      return authorised;
+    }
+
     // Open every sealed row before the keyring goes, so nothing is left
-    // ciphertext with no key in existence.
-    await unsealEverything();
-    await destroyKeyring();
-    const settings = await setPrivacySettings({ enabled: false });
+    // ciphertext with no key in existence — and clear the flags only after that,
+    // for the same reason the removal policy does.
+    const released = await releaseEveryLock();
+    if (!released) {
+      const message = 'Some locked items could not be opened, so nothing was changed.';
+      set({ busy: false, message });
+      return { ok: false, message };
+    }
+    const settings = await setPrivacySettings({ enabled: false, biometric: false });
 
     set({
       busy: false,
       settings,
       keyringPresent: false,
-      passcodeSet: false,
+      legacyPasscodeOnly: false,
       unlocked: true,
       unlockedAt: null,
       grantedRoots: [],
@@ -549,112 +855,6 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     return { ok: true };
   },
 
-  unlock: async (passcode) => {
-    set({ busy: true, message: null });
-    // Asked of the keyring rather than of the cached flag: an import can adopt
-    // a keyring underneath us, and the answer that matters is what is on disk.
-    if (!(await hasPasscodeWrap())) {
-      const message = 'This vault opens with the device lock, not a passcode.';
-      set({ busy: false, passcodeSet: false, message });
-      return { ok: false, message };
-    }
-    // `null` covers both "no keyring" and "the GCM tag did not verify", which are
-    // the same answer to the user: this passcode does not open this vault.
-    const key = await unlockWithPasscode(passcode);
-    if (!key) {
-      set({ busy: false, message: 'That passcode did not match.' });
-      return { ok: false, message: 'That passcode did not match.' };
-    }
-    const settings = get().settings;
-    // The passcode path opens the same boundary as the device path, and clears a
-    // queued reveal too, so the gate steps aside the moment the item behind it
-    // becomes readable.
-    const opened = get().revealRequest?.root ?? null;
-    set({
-      busy: false,
-      unlocked: true,
-      unlockedAt: Date.now(),
-      backgroundedAt: null,
-      message: null,
-      revealRequest: null,
-    });
-    if (opened) get().grant(opened);
-    syncScreenPrivacy(settings.secureScreen, true);
-    await get().reconcile();
-    return { ok: true };
-  },
-
-  authorize: async (passcode, reason) => {
-    set({ busy: true, message: null });
-
-    // 1. The device prompt, when this device has one armed and working. A
-    //    cancelled prompt is *not* an error: the passcode field is still there,
-    //    and the caller may still answer with it.
-    if (await isDeviceUnlockReady()) {
-      const authenticator = await getDeviceAuthenticator();
-      const outcome = await authenticator.authenticate(reason);
-      if (outcome.ok) {
-        const key = await unlockWithDevice();
-        if (key) {
-          set({
-            busy: false,
-            unlocked: true,
-            unlockedAt: Date.now(),
-            backgroundedAt: null,
-            message: null,
-          });
-          await get().reconcile();
-          return { ok: true };
-        }
-      }
-    }
-
-    // 2. The passcode, if this vault has one.
-    if (!(await hasPasscodeWrap())) {
-      const message = await isDeviceUnlockReady()
-        ? 'That did not succeed. Try the device prompt again.'
-        : 'This vault can only be opened with the device prompt, and it is not available here.';
-      set({ busy: false, message });
-      return { ok: false, message };
-    }
-    return get().unlock(passcode);
-  },
-
-  changePasscode: async (current, next) => {
-    if (next.length < MIN_PASSCODE_LENGTH) {
-      return { ok: false, message: MIN_PASSCODE_MESSAGE };
-    }
-
-    // Proving it is you comes first, and it is the same proof whichever way in
-    // this vault has: the old passcode, or the device prompt. A "change" that
-    // skipped this would be a way for someone holding an unlocked phone to set a
-    // passcode the owner does not know.
-    const verified = await get().authorize(current, 'Change the passcode for your Stash vault');
-    if (!verified.ok) {
-      return { ok: false, message: verified.message ?? 'That did not match.' };
-    }
-
-    const result = await setPasscodeWrap(next);
-    if (!result.ok) return { ok: false, message: result.message };
-    const [passcodeSet, deviceStoreKind] = await describeDevicePath(true);
-    set({ passcodeSet, deviceStoreKind, message: null });
-    return { ok: true };
-  },
-
-  /**
-   * Cross a lock boundary.
-   *
-   * The order of the checks is the whole design:
-   *
-   *  1. nothing protects this item → there is no boundary, so there is nothing to
-   *     ask. This is the branch that keeps a share, a launch, a search and an
-   *     ordinary save silent no matter how many locked folders exist.
-   *  2. this exact root is already open in this session and the key is here → the
-   *     user is moving around inside a folder they already unlocked.
-   *  3. no keyring exists at all → nothing is sealed, so nothing can be withheld.
-   *  4. otherwise prompt. A cancelled prompt opens nothing and queues the gate so
-   *     the refusal is explained rather than silent.
-   */
   requestAccess: async ({ kind, id, root }) => {
     if (!root) return { ok: true };
     if (!isSessionLocked() && get().grantedRoots.includes(root)) return { ok: true };
@@ -668,7 +868,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
 
     // The device prompt first, because it is one deliberate act with nothing to
     // type. A cancelled prompt is *not* an error here: it just means the gate
-    // takes over, with the passcode field already open.
+    // takes over and explains what happened.
     if (await isDeviceUnlockReady()) {
       const authenticator = await getDeviceAuthenticator();
       if (await authenticator.isAvailable()) {
@@ -678,7 +878,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     }
 
     set({ revealRequest: { kind, id, root } });
-    return { ok: false, message: 'Unlock to open the protected folder you tapped.' };
+    return { ok: false, message: 'Unlock to open the protected item you tapped.' };
   },
 
   grant: (root) => {
@@ -707,26 +907,37 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     set({ busy: true, message: null });
     const authenticator = await getDeviceAuthenticator();
 
-    const outcome = await authenticator.authenticate('Unlock your Stash vault');
+    const outcome = await authenticator.authenticate('Unlock a protected item in Stash');
     if (!outcome.ok) {
       // A failed or cancelled prompt changes nothing: the vault stays locked and
-      // the passcode field is still there. This is the whole failure-safety
-      // story — there is no path from an auth failure to data loss.
+      // the gate stays up. This is the whole failure-safety story — there is no
+      // path from an auth failure to data loss.
       set({ busy: false, message: outcome.message ?? 'Authentication did not succeed.' });
       return { ok: false, message: outcome.message };
     }
 
     const key = await unlockWithDevice();
     if (!key) {
-      // The prompt succeeded but the device key is gone (data cleared, restore
-      // on a new phone, keystore entry invalidated). Fall back, do not damage.
+      // The prompt succeeded but the device key is gone (data cleared, restore on
+      // a new phone, keystore entry invalidated). Report it; change nothing.
       const deviceUnlockReady = await isDeviceUnlockReady();
-      const message = (await hasPasscodeWrap())
-        ? 'Your passcode is needed to open the vault on this device.'
-        : 'This device can no longer open the vault, and no passcode was ever added. Locked items are unreadable.';
+      const message =
+        get().legacyPasscodeOnly || (await hasLegacyPasscodeWrap())
+          ? 'This vault still needs the passcode it was locked with before, which will move it to your device lock.'
+          : 'This device no longer holds the key for the vault, so its locked items cannot be opened here.';
       set({ busy: false, deviceUnlockReady, message });
       return { ok: false, message };
     }
+
+    /*
+     * The vault key is in hand, so a legacy passcode wrap on this keyring has
+     * just been proven unnecessary: the device path demonstrably works, and no
+     * screen in the app accepts a passcode any more. Dropping it here is the
+     * silent half of the migration — a vault that had both wraps becomes
+     * device-only without the user ever being asked anything, because they were
+     * never relying on the passcode in the first place.
+     */
+    const dropped = await dropLegacyPasscodeWrap();
 
     const settings = get().settings;
     // The boundary the user actually asked to cross is the boundary that opens.
@@ -740,6 +951,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       backgroundedAt: null,
       message: null,
       revealRequest: null,
+      ...(dropped ? { legacyPasscodeOnly: false } : {}),
     });
     if (opened) get().grant(opened);
     syncScreenPrivacy(settings.secureScreen, true);
@@ -773,7 +985,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   },
 
   /**
-   * Leaving the foreground ends the session, always.
+   * Leaving the foreground ends the session.
    *
    * This is what "the user locked the phone or the computer" looks like from
    * inside the app, and it is the whole point of unlocking per session: the same
@@ -810,11 +1022,11 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     // holds a key for. That is data loss, which is why the UI says so in those
     // words.
     await destroyKeyring();
-    const settings = await setPrivacySettings({ enabled: false });
+    const settings = await setPrivacySettings({ enabled: false, biometric: false });
     set({
       settings,
       keyringPresent: false,
-      passcodeSet: false,
+      legacyPasscodeOnly: false,
       unlocked: true,
       unlockedAt: null,
       grantedRoots: [],
@@ -822,22 +1034,6 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       message: null,
     });
     syncScreenPrivacy(settings.secureScreen, true);
-  },
-
-  armBiometrics: async () => {
-    const ok = await enableDeviceUnlock();
-    if (!ok) {
-      return { ok: false, message: 'This device could not set up the unlock prompt, so nothing was armed.' };
-    }
-    const settings = await setPrivacySettings({ biometric: true });
-    set({ settings, deviceUnlockReady: true });
-    return { ok: true };
-  },
-
-  disarmBiometrics: async () => {
-    await disableDeviceUnlock();
-    const settings = await setPrivacySettings({ biometric: false });
-    set({ settings, deviceUnlockReady: false });
   },
 
   update: async (patch) => {

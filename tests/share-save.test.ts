@@ -1,11 +1,13 @@
 import Dexie from 'dexie';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, openDatabase } from '@/db';
-import { createKeyring, forgetVaultKey } from '@/lib/privacy/keyring';
+import { forgetVaultKey } from '@/lib/privacy/keyring';
+import { setSecureStore } from '@/lib/privacy/secure-store';
 import { createCapacitorShareBridge } from '@/lib/share/bridge';
 import { parseShare } from '@/lib/share/parse';
 import { useCaptureStore } from '@/stores/capture-store';
 import { useVaultStore } from '@/stores/vault-store';
+import { memorySecureStore, setupDeviceVault } from './privacy-fixtures';
 
 /**
  * A link shared into Stash, all the way to the vault.
@@ -35,6 +37,7 @@ beforeEach(async () => {
   forgetVaultKey();
   useVaultStore.setState({ ...PRISTINE_VAULT }, true);
   useCaptureStore.setState({ ...PRISTINE_CAPTURE }, true);
+  setSecureStore(memorySecureStore());
   await useVaultStore.getState().initialize();
 });
 
@@ -67,7 +70,8 @@ describe('a share arrives', () => {
   });
 
   it('saves while the vault is locked, without raising the unlock prompt', async () => {
-    expect((await createKeyring('open sesame 42')).ok).toBe(true);
+    // A locked vault, set up the way this build sets one up.
+    await setupDeviceVault();
     // A cold start: the keyring is on disk, the key is not in memory.
     forgetVaultKey();
     await useVaultStore.getState().refresh();

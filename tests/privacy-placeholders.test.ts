@@ -4,17 +4,13 @@ import { db, openDatabase } from '@/db';
 import { createFolder, setFolderLocked } from '@/db/repos/folders';
 import { createLink } from '@/db/repos/links';
 import { createStaticAuthenticator, setDeviceAuthenticator } from '@/lib/privacy/auth';
-import {
-  createKeyring,
-  enableDeviceUnlock,
-  forgetVaultKey,
-  isSessionLocked,
-} from '@/lib/privacy/keyring';
+import { forgetVaultKey, isSessionLocked } from '@/lib/privacy/keyring';
 import { isSealed } from '@/lib/privacy/protection';
 import { setSecureStore, type SecureStore } from '@/lib/privacy/secure-store';
 import { searchVault } from '@/lib/search';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { useVaultStore } from '@/stores/vault-store';
+import { armDeviceWrap, setupLegacyPasscodeVault } from './privacy-fixtures';
 
 /**
  * Locked items stay in the list, and tapping one asks for the prompt.
@@ -75,7 +71,9 @@ beforeEach(async () => {
   usePrivacyStore.setState({ ...PRISTINE_PRIVACY }, true);
   setDeviceAuthenticator(createStaticAuthenticator({ ok: true }, { available: true }));
   setSecureStore(memorySecureStore());
-  await createKeyring(PASSCODE);
+  // The vault an earlier build left behind: openable by the passcode it asked
+  // for, and by no device prompt, so the gate is what has to ask.
+  await setupLegacyPasscodeVault(PASSCODE);
 });
 
 describe('a locked folder in the tree', () => {
@@ -178,7 +176,7 @@ describe('a locked folder in the tree', () => {
     // The request queues the gate, and the passcode answers it — the same path
     // a legacy vault takes, and the only path that grants anything.
     expect((await usePrivacyStore.getState().requestAccess({ kind: 'folder', id: ids.secret, root: ids.secret })).ok).toBe(false);
-    expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
+    expect((await usePrivacyStore.getState().unlockWithLegacyPasscode(PASSCODE)).ok).toBe(true);
     await useVaultStore.getState().refresh();
 
     const state = useVaultStore.getState();
@@ -193,7 +191,7 @@ describe('tapping a locked row', () => {
   it('runs the device prompt and reports success when it answers', async () => {
     const ids = await arrangeLockedFolder();
     // Arm the device path while the vault is still open, then lock it.
-    expect(await enableDeviceUnlock()).toBe(true);
+    expect(await armDeviceWrap()).toBe(true);
     forgetVaultKey();
     await useVaultStore.getState().refresh();
 
@@ -224,7 +222,7 @@ describe('tapping a locked row', () => {
     });
 
     // Using the passcode satisfies it: the queued request goes away with it.
-    expect((await usePrivacyStore.getState().unlock(PASSCODE)).ok).toBe(true);
+    expect((await usePrivacyStore.getState().unlockWithLegacyPasscode(PASSCODE)).ok).toBe(true);
     expect(usePrivacyStore.getState().revealRequest).toBeNull();
   });
 

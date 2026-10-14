@@ -42,13 +42,14 @@ describe('merge', () => {
     expect(planTotal(plan)).toBe(3 + 4 + 3 + 2 + 2 + 2);
   });
 
-  it('skips rows whose id is already here and leaves them untouched', () => {
+  it('leaves rows that are already here untouched instead of writing them again', () => {
+    const source = sampleData();
     const plan = planImport({
-      data: sampleData(),
+      data: source,
       existing: existing({
-        folders: [{ id: 'f-work' } as never],
-        links: [{ id: 'l-1' } as never],
-        notes: [{ id: 'n-root' } as never],
+        folders: [source.folders[0] as never],
+        links: [source.links[0] as never],
+        notes: [source.notes[0] as never],
       }),
       mode: 'merge',
       backupHasKeyring: false,
@@ -61,18 +62,37 @@ describe('merge', () => {
     expect(plan.skipped).toEqual({ folders: 1, links: 1, notes: 1, tags: 0 });
     // Nothing that already exists is in the write set, so nothing is overwritten.
     expect(plan.folders.map((row) => row.id)).not.toContain('f-work');
-    expect(plan.messages.join(' ')).toContain('already exist here');
+    expect(plan.messages.join(' ')).toContain('already existed here');
+  });
+
+  it('inserts an id collision as a new record rather than dropping it', () => {
+    // Same id, different folder. The local row keeps its id and its content; the
+    // incoming row is a different thing and is given a fresh id. Skipping it —
+    // the old behaviour — would have silently lost it.
+    const plan = planImport({
+      data: data({ folders: [folder('f-1', 'Incoming')] }),
+      existing: existing({ folders: [folder('f-1', 'Something else')] }),
+      mode: 'merge',
+      backupHasKeyring: false,
+      deviceHasKeyring: false,
+      newId: () => 'fresh-id',
+    });
+
+    expect(plan.counts.folders).toBe(1);
+    expect(plan.folders[0]?.id).toBe('fresh-id');
+    expect(plan.folders[0]?.name).toBe('Incoming');
+    expect(plan.skipped.folders).toBe(0);
   });
 
   it('keeps a child attached to a parent that already exists locally', () => {
-    // The parent is skipped, so the child must attach to the local copy rather
-    // than being re-homed or orphaned.
+    // The parent is merged into the local copy, so the child must attach to the
+    // id that already exists rather than to the id from the file.
     const source = data({
       folders: [folder('f-parent', 'Parent'), folder('f-child', 'Child', 'f-parent')],
     });
     const plan = planImport({
       data: source,
-      existing: existing({ folders: [{ id: 'f-parent' } as never] }),
+      existing: existing({ folders: [folder('f-parent', 'Parent')] }),
       mode: 'merge',
       backupHasKeyring: false,
       deviceHasKeyring: false,
@@ -81,6 +101,26 @@ describe('merge', () => {
     expect(plan.counts.folders).toBe(1);
     expect(plan.folders[0]?.id).toBe('f-child');
     expect(plan.folders[0]?.parentId).toBe('f-parent');
+  });
+
+  it('follows a remapped parent through an id that was taken', () => {
+    // The parent cannot keep its id, so the child must point at the id the
+    // parent *got*, not the one it arrived with.
+    const plan = planImport({
+      data: data({
+        folders: [folder('f-parent', 'Parent'), folder('f-child', 'Child', 'f-parent')],
+      }),
+      existing: existing({ folders: [folder('f-parent', 'A different parent')] }),
+      mode: 'merge',
+      backupHasKeyring: false,
+      deviceHasKeyring: false,
+      newId: () => 'remapped-parent',
+    });
+
+    expect(plan.counts.folders).toBe(2);
+    expect(plan.folders.map((row) => row.id)).toEqual(['remapped-parent', 'f-child']);
+    expect(plan.folders[1]?.parentId).toBe('remapped-parent');
+    expect(plan.idMap.folders['f-parent']).toBe('remapped-parent');
   });
 
   it('keeps a join row whose other half is already here', () => {
@@ -104,7 +144,10 @@ describe('merge', () => {
   it('does not write a join row that is already here', () => {
     const source = data({
       links: [link('l-1', 'https://x.test')],
-      tags: [{ id: 't-1', name: 'one' }],
+      tags: [
+        { id: 't-1', name: 'one' },
+        { id: 't-2', name: 'two' },
+      ],
       linkTags: [
         { linkId: 'l-1', tagId: 't-1' },
         { linkId: 'l-1', tagId: 't-2' },
@@ -113,8 +156,11 @@ describe('merge', () => {
     const plan = planImport({
       data: source,
       existing: existing({
-        links: [{ id: 'l-1' } as never],
-        tags: [{ id: 't-1' } as never, { id: 't-2' } as never],
+        links: [link('l-1', 'https://x.test')],
+        tags: [
+          { id: 't-1', name: 'one' } as never,
+          { id: 't-2', name: 'two' } as never,
+        ],
         linkTags: [{ linkId: 'l-1', tagId: 't-1' } as never],
       }),
       mode: 'merge',
@@ -375,7 +421,7 @@ describe('a note whose parent exists only locally', () => {
   it('attaches to the local parent rather than being promoted to a root note', () => {
     const plan = planImport({
       data: data({ notes: [note('n-parent', 'Parent', ''), note('n-child', 'Child', '', 'n-parent')] }),
-      existing: existing({ notes: [{ id: 'n-parent' } as never] }),
+      existing: existing({ notes: [note('n-parent', 'Parent', '')] }),
       mode: 'merge',
       backupHasKeyring: false,
       deviceHasKeyring: false,

@@ -71,8 +71,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
   const [mode, setMode] = React.useState<Mode>('actions');
   const [note, setNote] = React.useState(link?.userNote ?? '');
   const [busy, setBusy] = React.useState(false);
-  const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
-  const passcodeSet = usePrivacyStore((state) => state.passcodeSet);
+  const ensureLocking = usePrivacyStore((state) => state.ensureLocking);
   const protectedId = link?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.links.has(protectedId));
   const tagNames = useVaultStore((state) => selectTagsForLink(state, protectedId));
@@ -387,31 +386,23 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
                       : 'Lock this link'
                 }
                 onClick={() => {
-                  if (!keyringPresent) {
-                    toast('Turn on locking first', { tone: 'danger' });
-                    close();
-                    router.push('/settings');
-                    return;
-                  }
-                  // See the folder sheet: a passcode has to exist before anything
-                  // new is locked, so the device prompt is never the only key.
-                  if (!passcodeSet) {
-                    toast('Set a passcode first, so this link can never become unreachable', {
-                      tone: 'danger',
-                    });
-                    close();
-                    router.push('/settings');
-                    return;
-                  }
                   if (isProtected && !link.isLocked) {
                     toast('This link is inside a locked folder, so it is already protected.');
                     return;
                   }
                   const next = !link.isLocked;
-                  void useVaultStore.getState().toggleLinkLocked(link.id).then(() => {
-                    toast(next ? 'Locked — the address is now encrypted' : 'Unlocked', { tone: 'success' });
-                  });
                   close();
+                  // See the folder sheet: locking the first item is what turns
+                  // locking on, and a device with no screen lock says so instead.
+                  void (async () => {
+                    const ready = await ensureLocking();
+                    if (!ready.ok) {
+                      toast(ready.message ?? 'Locking is unavailable on this device', { tone: 'danger' });
+                      return;
+                    }
+                    await useVaultStore.getState().toggleLinkLocked(link.id);
+                    toast(next ? 'Locked — the address is now encrypted' : 'Unlocked', { tone: 'success' });
+                  })();
                 }}
               />
               {/*

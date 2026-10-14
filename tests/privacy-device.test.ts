@@ -7,53 +7,45 @@ import {
   createStaticAuthenticator,
   devicePromptName,
   getDeviceAuthenticator,
+  messageFor,
   setDeviceAuthenticator,
 } from '@/lib/privacy/auth';
 import { hasDeviceCredential } from '@/lib/privacy/webauthn';
+import * as keyring from '@/lib/privacy/keyring';
 import {
-  createKeyring,
-  createKeyringWithDevice,
-  enableDeviceUnlock,
+  adoptVaultKeyForDevice,
+  createDeviceKeyring,
+  dropLegacyPasscodeWrap,
+  ensureDeviceCredential,
   forgetVaultKey,
+  getVaultKey,
   hasKeyring,
-  hasPasscodeWrap,
   isDeviceUnlockReady,
   isSessionLocked,
   readKeyring,
   toExportedKeyring,
   unlockWithDevice,
-  unlockWithPasscode,
 } from '@/lib/privacy/keyring';
+import { hasLegacyPasscodeWrap, openWithLegacyPasscode } from '@/lib/privacy/legacy-passcode';
 import { isSealed } from '@/lib/privacy/protection';
-import { setSecureStore, type SecureStore } from '@/lib/privacy/secure-store';
+import { setSecureStore, UNAVAILABLE_SECURE_STORE } from '@/lib/privacy/secure-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
+import { memorySecureStore, setupLegacyPasscodeVault } from './privacy-fixtures';
 
 /**
- * Locking that asks for the device instead of a passcode.
+ * Locking that asks the device instead of Stash.
  *
- * This is the setup the user described: nothing to invent, nothing to type —
- * the same shape as a banking app asking for the phone's own lock. What these
- * tests pin down is that it is a *whole* vault lock rather than a decoration:
- * the key really is only reachable through the device wrap, a passcode can be
- * added later without re-encrypting anything, and the absent passcode is
- * reported honestly instead of pretending a recovery path exists.
+ * This is the whole system: nothing to invent, nothing to type, the same shape as
+ * a banking app asking for the phone's own lock — with one difference that is the
+ * product's reason for existing, which is that the lock is on a folder rather
+ * than on the app. What these tests pin down is that it is a *whole* lock: the key
+ * really is only reachable through the device wrap, the content really is
+ * ciphertext at rest, and there is no second secret anywhere.
+ *
+ * The legacy shape is covered here too, because it is the one thing that can make
+ * that content unreachable: a vault an earlier build wrapped under a passcode has
+ * to keep opening, and has to convert.
  */
-
-/** Stands in for Keystore-backed storage (native) or the app's own table (web). */
-function memorySecureStore(kind: 'native' | 'web' = 'native'): SecureStore {
-  const values = new Map<string, string>();
-  return {
-    kind,
-    isAvailable: async () => true,
-    get: async (key) => values.get(key) ?? null,
-    set: async (key, value) => {
-      values.set(key, value);
-    },
-    remove: async (key) => {
-      values.delete(key);
-    },
-  };
-}
 
 const PRISTINE = usePrivacyStore.getState();
 
@@ -72,21 +64,44 @@ beforeEach(async () => {
 });
 
 describe('setting up with the device lock alone', () => {
-  it('creates a keyring that has a device wrap and no passcode wrap', async () => {
-    expect(await createKeyringWithDevice()).toMatchObject({ ok: true });
+  it('creates a keyring that has a device wrap and no passcode fields at all', async () => {
+    expect(await createDeviceKeyring()).toMatchObject({ ok: true });
 
-    const keyring = await readKeyring();
-    expect(keyring?.wrappedByDevice).toBeTruthy();
-    expect(keyring?.wrappedByPasscode).toBeUndefined();
-    expect(keyring?.kdf).toBeUndefined();
+    const record = await readKeyring();
+    expect(record?.wrappedByDevice).toBeTruthy();
+    expect(record?.wrappedByPasscode).toBeUndefined();
+    expect(record?.kdf).toBeUndefined();
 
     expect(await hasKeyring()).toBe(true);
-    expect(await hasPasscodeWrap()).toBe(false);
+    expect(await hasLegacyPasscodeWrap()).toBe(false);
     expect(isSessionLocked()).toBe(false);
   });
 
-  it('opens with the device and refuses every passcode', async () => {
-    await createKeyringWithDevice();
+  it('has no passcode API left in the module at all', () => {
+    /*
+     * A structural assertion, and it is the point of the change rather than a
+     * curiosity: the reported problem was a lock system that asked for a password.
+     * Every function that could create, set, remove or verify one is gone from the
+     * keyring, so there is no code path — and no *reachable* code path in a later
+     * refactor — that could reintroduce a second secret without deleting this
+     * test first.
+     */
+    for (const name of [
+      'createKeyring',
+      'unlockWithPasscode',
+      'setPasscodeWrap',
+      'removePasscodeWrap',
+      'hasPasscodeWrap',
+      'createKeyringWithDevice',
+      'enableDeviceUnlock',
+      'disableDeviceUnlock',
+    ]) {
+      expect(Object.keys(keyring)).not.toContain(name);
+    }
+  });
+
+  it('opens with the device and nothing else can open it', async () => {
+    await createDeviceKeyring();
     forgetVaultKey();
     expect(isSessionLocked()).toBe(true);
 
@@ -95,55 +110,56 @@ describe('setting up with the device lock alone', () => {
 
     // There is no passcode, so no input opens it — including a guess that would
     // have been right on a passcode-locked vault.
-    expect(await unlockWithPasscode('')).toBeNull();
-    expect(await unlockWithPasscode('open sesame 42')).toBeNull();
+    expect(await openWithLegacyPasscode('')).toBeNull();
+    expect(await openWithLegacyPasscode('open sesame 42')).toBeNull();
     expect(isSessionLocked()).toBe(true);
   });
 
-  it('reports the device path as ready, so the lock screen can offer it', async () => {
-    await createKeyringWithDevice();
+  it('reports the device path as ready, so the gate can offer it', async () => {
+    await createDeviceKeyring();
     expect(await isDeviceUnlockReady()).toBe(true);
   });
 
   it('refuses a second setup rather than replacing a key that is in use', async () => {
-    await createKeyringWithDevice();
-    expect(await createKeyringWithDevice()).toMatchObject({ ok: false });
-    expect(await createKeyring('a passcode')).toMatchObject({ ok: false });
+    await createDeviceKeyring();
+    expect(await createDeviceKeyring()).toMatchObject({ ok: false });
+    expect(await hasKeyring()).toBe(true);
   });
 
   it('will not lock the vault when the platform cannot store a device key', async () => {
-    setSecureStore({
-      kind: 'unavailable',
-      isAvailable: async () => false,
-      get: async () => null,
-      set: async () => undefined,
-      remove: async () => undefined,
-    });
-    const result = await createKeyringWithDevice();
+    setSecureStore(UNAVAILABLE_SECURE_STORE);
+    const result = await createDeviceKeyring();
     expect(result.ok).toBe(false);
+    // Nothing was written, so there is no keyring promising an unlock nothing can
+    // perform.
     expect(await hasKeyring()).toBe(false);
+  });
+
+  it('has nothing to drop when the vault never had a passcode wrap', async () => {
+    await createDeviceKeyring();
+    expect(await dropLegacyPasscodeWrap()).toBe(false);
   });
 });
 
 describe('a device-locked vault has no passcode', () => {
   it('wraps the key once, under the device key, and nothing else', async () => {
-    await createKeyringWithDevice();
+    await createDeviceKeyring();
 
-    const keyring = await readKeyring();
-    expect(keyring?.wrappedByDevice).toBeTruthy();
-    // The whole point of the change: there is no second secret to lose, so a
-    // vault set up today has nothing for a passcode field to open.
-    expect(keyring?.wrappedByPasscode).toBeUndefined();
-    expect(keyring?.kdf).toBeUndefined();
-    expect(await hasPasscodeWrap()).toBe(false);
+    const record = await readKeyring();
+    expect(record?.wrappedByDevice).toBeTruthy();
+    // The whole point of the change: there is no second secret to lose, so a vault
+    // set up today has nothing for a passcode field to open.
+    expect(record?.wrappedByPasscode).toBeUndefined();
+    expect(record?.kdf).toBeUndefined();
+    expect(await hasLegacyPasscodeWrap()).toBe(false);
 
     forgetVaultKey();
     expect(await unlockWithDevice()).not.toBeNull();
-    expect(await unlockWithPasscode('anything at all')).toBeNull();
+    expect(await openWithLegacyPasscode('anything at all')).toBeNull();
   });
 
   it('still seals content, so what locking protects is really encrypted', async () => {
-    await createKeyringWithDevice();
+    await createDeviceKeyring();
     const note = await createNote({ title: 'Passport scan', content: 'private', parentNoteId: null });
     if (!note.ok) throw new Error('note');
     await setNoteLocked(note.note.id, true);
@@ -154,12 +170,77 @@ describe('a device-locked vault has no passcode', () => {
   });
 });
 
+describe('a vault an earlier build locked with a passcode', () => {
+  it('opens with the passcode it was locked with, and is not changed by reading it', async () => {
+    await setupLegacyPasscodeVault('open sesame 42');
+    const before = (await readKeyring())?.wrappedByPasscode?.ct;
+
+    forgetVaultKey();
+    // No device wrap exists, so the prompt has nothing to release.
+    expect(await isDeviceUnlockReady()).toBe(false);
+    expect(await unlockWithDevice()).toBeNull();
+
+    // The passcode is the one input that reaches it — and reading changes nothing.
+    const wrong = await openWithLegacyPasscode('not the one');
+    expect(wrong).toBeNull();
+    expect((await readKeyring())?.wrappedByPasscode?.ct).toBe(before);
+
+    const key = await openWithLegacyPasscode('open sesame 42');
+    expect(key).not.toBeNull();
+    expect((await readKeyring())?.wrappedByPasscode?.ct).toBe(before);
+    expect(await hasLegacyPasscodeWrap()).toBe(true);
+  });
+
+  it('converts to the device lock, keeping the same vault key', async () => {
+    await setupLegacyPasscodeVault('open sesame 42');
+    const before = getVaultKey();
+    expect(before).not.toBeNull();
+    forgetVaultKey();
+
+    const key = await openWithLegacyPasscode('open sesame 42');
+    if (!key) throw new Error('the passcode did not open its own vault');
+    expect(await adoptVaultKeyForDevice(key)).toMatchObject({ ok: true });
+
+    // One write, both facts: the device wrap is there and the passcode is gone, so
+    // there is no instant where the record promises a way in that does not exist.
+    const record = await readKeyring();
+    expect(record?.wrappedByDevice).toBeTruthy();
+    expect(record?.wrappedByPasscode).toBeUndefined();
+    expect(record?.kdf).toBeUndefined();
+    expect(await hasLegacyPasscodeWrap()).toBe(false);
+
+    // The key itself is the same key, which is why nothing had to be re-encrypted.
+    forgetVaultKey();
+    expect(await unlockWithDevice()).not.toBeNull();
+    expect(await openWithLegacyPasscode('open sesame 42')).toBeNull();
+  });
+
+  it('refuses to convert when this device cannot store a key, leaving the vault openable', async () => {
+    await setupLegacyPasscodeVault('open sesame 42');
+    forgetVaultKey();
+    setSecureStore(UNAVAILABLE_SECURE_STORE);
+
+    const key = await openWithLegacyPasscode('open sesame 42');
+    if (!key) throw new Error('the passcode did not open its own vault');
+    const converted = await adoptVaultKeyForDevice(key);
+    expect(converted.ok).toBe(false);
+
+    // This is the failure that would lose the content, so it is checked with the
+    // vault reloaded: the passcode wrap is untouched and still opens it. Writing
+    // the record without the key would have discarded the only working wrap.
+    forgetVaultKey();
+    setSecureStore(memorySecureStore());
+    expect(await openWithLegacyPasscode('open sesame 42')).not.toBeNull();
+    expect(await hasLegacyPasscodeWrap()).toBe(true);
+  });
+});
+
 describe('exporting a device-locked vault', () => {
   it('hands over no keyring, because there is nothing portable to hand over', async () => {
-    await createKeyringWithDevice();
-    const keyring = await readKeyring();
-    expect(keyring).not.toBeNull();
-    expect(toExportedKeyring(keyring!)).toBeNull();
+    await createDeviceKeyring();
+    const record = await readKeyring();
+    expect(record).not.toBeNull();
+    expect(toExportedKeyring(record!)).toBeNull();
 
     const bundle = await exportVault();
     expect(bundle.security?.keyring).toBeUndefined();
@@ -172,41 +253,15 @@ describe('exporting a device-locked vault', () => {
    * opening, or that content becomes unreachable.
    */
   it('hands over the passcode wrap when the vault has one', async () => {
-    await createKeyring('a portable secret');
+    await setupLegacyPasscodeVault('a portable secret');
 
-    const keyring = await readKeyring();
-    const exported = toExportedKeyring(keyring!);
+    const record = await readKeyring();
+    const exported = toExportedKeyring(record!);
     expect(exported?.wrappedByPasscode).toBeTruthy();
     expect(JSON.stringify(exported)).not.toContain('wrappedByDevice');
 
     const bundle = await exportVault();
     expect(bundle.security?.keyring?.wrappedByPasscode).toBeTruthy();
-  });
-});
-
-describe('arming the device path on a passcode vault', () => {
-  it('adds a device wrap beside the passcode wrap, and the passcode still works', async () => {
-    await createKeyring('open sesame 42');
-    expect(await enableDeviceUnlock()).toBe(true);
-
-    expect(await hasPasscodeWrap()).toBe(true);
-    expect(await isDeviceUnlockReady()).toBe(true);
-
-    forgetVaultKey();
-    expect(await unlockWithDevice()).not.toBeNull();
-    forgetVaultKey();
-    expect(await unlockWithPasscode('open sesame 42')).not.toBeNull();
-  });
-
-  it('reports the device path as unusable when the stored key is gone', async () => {
-    await createKeyring('open sesame 42');
-    await enableDeviceUnlock();
-    // A cleared app: the wrap in the keyring survives, the secure store does not.
-    setSecureStore(memorySecureStore());
-    expect(await isDeviceUnlockReady()).toBe(false);
-    // And unlocking falls back rather than failing twice.
-    expect(await unlockWithDevice()).toBeNull();
-    expect(await unlockWithPasscode('open sesame 42')).not.toBeNull();
   });
 });
 
@@ -217,10 +272,9 @@ describe('capability versus enrollment on a desktop', () => {
    * On a desktop the device prompt is WebAuthn, so "can this machine prompt?" and
    * "has Stash enrolled a credential here?" are two different questions. Reading
    * the second one to decide whether the feature can be *offered* is a deadlock:
-   * the credential is created by arming, and arming is refused while the feature
-   * reads as unavailable. A machine with Windows Hello configured has to answer
-   * "yes, I can prompt" before anything has been enrolled — that is what makes the
-   * settings switch tappable at all.
+   * the credential is created by enrolling, and enrolling is refused while the
+   * feature reads as unavailable. A machine with Windows Hello configured has to
+   * answer "yes, I can prompt" before anything has been enrolled.
    */
   it('answers yes on a machine that can prompt, with nothing enrolled', async () => {
     const globals = globalThis as unknown as Record<string, unknown>;
@@ -239,20 +293,47 @@ describe('capability versus enrollment on a desktop', () => {
       const authenticator = await getDeviceAuthenticator();
       expect(authenticator.kind).toBe('web');
       expect(await authenticator.isAvailable()).toBe(true);
-      // Nothing is enrolled, so this is capability alone — which is the point.
       expect(await hasDeviceCredential()).toBe(false);
+      /*
+       * And the question that decides whether locks get removed answers
+       * `'unknown'` here, never `'insecure'`. A page cannot see the operating
+       * system's screen lock, and a guess in that direction would delete
+       * protection the user asked for on a machine that may be perfectly secure.
+       */
+      expect(await authenticator.security()).toBe('unknown');
     } finally {
       globals.window = realWindow;
       globals.PublicKeyCredential = realPublicKeyCredential;
       setDeviceAuthenticator(null);
     }
   });
+
+  it('does not need an enrolment of its own on a native platform', async () => {
+    setSecureStore(memorySecureStore('native'));
+    await createDeviceKeyring();
+    expect(await ensureDeviceCredential()).toBe(true);
+  });
 });
 
-describe('naming the prompt', () => {
+describe('what the prompt is called', () => {
   it('names the platform dialog rather than saying "biometrics"', () => {
     expect(devicePromptName('web')).toContain('Windows Hello');
     expect(devicePromptName('native')).toContain('fingerprint');
     expect(devicePromptName('unavailable')).toContain('fingerprint');
+  });
+
+  /**
+   * The requirement, stated as something that cannot regress by accident: no
+   * outcome of authentication tells the user to reach for a Stash passcode, because
+   * there is no such thing any more. Every message names the device instead.
+   */
+  it('never sends anyone to a passcode', () => {
+    for (const reason of ['cancelled', 'unavailable', 'failed', 'lockout'] as const) {
+      for (const kind of ['native', 'web'] as const) {
+        expect(messageFor(reason, kind).toLowerCase()).not.toContain('passcode');
+      }
+    }
+    // And the failure to be most careful about says what to do instead.
+    expect(messageFor('unavailable')).toContain('screen lock');
   });
 });

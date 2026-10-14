@@ -8,7 +8,7 @@ import { PrimaryActionButton } from './primary-action';
 import { AndroidBack } from './android-back';
 import { CaptureSheet } from './capture/capture-sheet';
 import { LockGate } from './privacy/lock-gate';
-import { PasscodeOnboarding } from './privacy/passcode-onboarding';
+import { NoScreenLockNotice } from './privacy/no-screen-lock-notice';
 import { Toaster } from './ui/toast';
 import { useCaptureStore } from '@/stores/capture-store';
 import { useEditorStore } from '@/stores/editor-store';
@@ -104,11 +104,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* Last so it paints over the shell, the sheets and the toasts alike. */}
       <LockGate />
       {/*
-        * The first-run passcode prompt sits *above* the lock gate: a vault with no
-        * passcode has no boundary to cross, so the gate has nothing to say and
-        * this is the only thing that should be asking anything.
+        * Above even the gate, and above everything else in the app.
+        *
+        * It reports a change the app made to the vault rather than asking for
+        * anything, and it cannot wait: if this device has no screen lock, the user
+        * has to know that their folders are no longer protected before they
+        * assume they are. See the component for the rule it reports.
         */}
-      <PasscodeOnboarding />
+      <NoScreenLockNotice />
     </div>
   );
 }

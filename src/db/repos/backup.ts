@@ -27,7 +27,7 @@ import { getVaultKey, readKeyring, toExportedKeyring } from '@/lib/privacy/keyri
 import { isSealed, openFolder, openLink, openNote } from '@/lib/privacy/protection';
 import { reconcileProtection } from '@/lib/privacy/reconcile';
 import { APP_VERSION } from '@/lib/version';
-import type { ImportCounts, ImportPlan } from '@/lib/backup/merge';
+import type { ImportCounts, ImportPlan, MergeCounts } from '@/lib/backup/merge';
 import { getPrivacySettings } from './settings';
 import { liveOnly } from '@/lib/trash';
 
@@ -345,6 +345,14 @@ export interface ApplyOutcome {
   ok: boolean;
   message?: string;
   written: ImportCounts;
+  /**
+   * Rows the file offered that were recognized as already here.
+   *
+   * Reported next to `written` so the summary can say what a merge actually did:
+   * a folder that was merged into an existing one is counted here and *not* as a
+   * created folder, which is the number the user is being asked to trust.
+   */
+  merged: MergeCounts;
   /** JSON of the vault as it was, for a replace. Empty for a merge. */
   emergencyBackup: string | null;
   /**
@@ -356,6 +364,7 @@ export interface ApplyOutcome {
 }
 
 const ZERO_COUNTS: ImportCounts = { folders: 0, links: 0, tags: 0, notes: 0, linkTags: 0, noteLinks: 0 };
+const ZERO_MERGED: MergeCounts = { folders: 0, links: 0, notes: 0, tags: 0 };
 
 /**
  * Perform a planned restore.
@@ -386,6 +395,7 @@ export async function applyImport(plan: ImportPlan, options: { keyring: Exported
         ok: false,
         message: `Could not take a safety copy of the current data (${error instanceof Error ? error.message : 'unknown error'}), so nothing was changed.`,
         written: ZERO_COUNTS,
+        merged: ZERO_MERGED,
         emergencyBackup: null,
         keyringReplaced: false,
       };
@@ -446,6 +456,7 @@ export async function applyImport(plan: ImportPlan, options: { keyring: Exported
       ok: false,
       message: error instanceof Error ? error.message : 'The restore could not be completed.',
       written: ZERO_COUNTS,
+      merged: ZERO_MERGED,
       emergencyBackup,
       keyringReplaced: false,
     };
@@ -462,6 +473,7 @@ export async function applyImport(plan: ImportPlan, options: { keyring: Exported
   return {
     ok: true,
     written: plan.counts,
+    merged: plan.merged,
     emergencyBackup,
     keyringReplaced,
   };
@@ -474,10 +486,14 @@ function portableMetaRows(
 ): MetaRow[] {
   if (!settings) return [];
 
-  // The lock policy, the screen-privacy flag and the biometric preference are
-  // the user's choices and they travel. Whether privacy is *on* is not a
-  // preference — it follows from a keyring existing, and only installing one can
-  // change it.
+  // The lock policy, the screen-privacy flag and the biometric preference travel
+  // because a file written by an earlier build carries them, and a restore should
+  // not silently drop a user's settings on the way back in. `biometric` is legacy
+  // now: locking has no separate switch, because creating a keyring *is* turning
+  // it on, so the field round-trips and decides nothing.
+  //
+  // Whether privacy is *on* is not a preference — it follows from a keyring
+  // existing, and only installing one can change it.
   const privacy: PrivacySettings = {
     ...current,
     enabled: current.enabled || installingKeyring,
