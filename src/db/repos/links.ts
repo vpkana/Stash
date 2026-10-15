@@ -208,6 +208,55 @@ export async function setLinkFavorite(id: string, isFavorite: boolean): Promise<
 }
 
 /**
+ * Write an explicit order for the links in one folder.
+ *
+ * The same contract as `setFolderOrder`: the caller passes the whole list in the
+ * order the user left it, every row that moved gets its index written, and ids
+ * that do not belong to this folder (or repeat) are ignored so a stale list from
+ * a screen left open cannot re-home anything.
+ *
+ * `updatedAt` is untouched, for the same reason a folder reorder leaves it alone:
+ * moving something is not editing it, and a list that sorted itself by "recently
+ * changed" would reshuffle the instant it was dragged.
+ *
+ * A locked link is written through `update`, which merges fields — so the row
+ * keeps its `enc` ciphertext and the position is the only thing that changes.
+ */
+export async function setLinkOrder(
+  folderId: string | null,
+  orderedIds: readonly string[],
+): Promise<boolean> {
+  return db.transaction('rw', db.links, async () => {
+    const scope = await db.links
+      .filter((link) => (link.folderId ?? null) === (folderId ?? null))
+      .toArray();
+    const byId = new Map(scope.map((link) => [link.id, link]));
+
+    const seen = new Set<string>();
+    const placed: Array<{ id: string; sortOrder: number }> = [];
+    for (const id of orderedIds) {
+      const link = byId.get(id);
+      if (!link || seen.has(id)) continue;
+      seen.add(id);
+      const index = placed.length;
+      if (link.sortOrder !== index) placed.push({ id, sortOrder: index });
+    }
+
+    // Anything the caller did not mention keeps a place after the ones it did.
+    const trailing = scope.filter((link) => !seen.has(link.id));
+    let next = placed.length;
+    for (const link of trailing) {
+      if (link.sortOrder !== next) placed.push({ id: link.id, sortOrder: next });
+      next += 1;
+    }
+
+    if (placed.length === 0) return false;
+    await Promise.all(placed.map((entry) => db.links.update(entry.id, { sortOrder: entry.sortOrder })));
+    return true;
+  });
+}
+
+/**
  * The `isArchived` column is legacy, and there is no writer.
  *
  * Archiving used to hide a link from every screen the user had, which made it

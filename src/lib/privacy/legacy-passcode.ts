@@ -38,12 +38,42 @@ import { holdVaultKey, readKeyring } from './keyring';
  */
 export const LEGACY_PASSCODE_HEADLINE = 'Unlock this vault once';
 export const LEGACY_PASSCODE_EXPLANATION =
-  'These locked items were encrypted with the Stash passcode you used before your device lock became the way in. Enter it once to move them to your fingerprint, face or screen lock — it will not be needed again, and nothing is re-encrypted or changed.';
+  'This vault was locked by an older version of Stash, which encrypted it with a passcode. It is the only case in Stash that ever asks for one: nothing in the app creates a passcode, so a vault set up in this version never shows this screen. Enter the old passcode once to move these items to your device lock — it will not be needed again, and nothing is re-encrypted or changed.';
+
+/**
+ * The one-time prompt's field label.
+ *
+ * Names the situation ("this vault", from before) rather than "the passcode you
+ * used before", which read as an accusation to anyone who had never set one. A
+ * vault created by this build cannot reach this prompt at all.
+ */
+export const LEGACY_PASSCODE_FIELD_LABEL = 'The passcode from the older version';
 
 /** Whether this vault still carries a passcode wrap that has to be converted. */
 export async function hasLegacyPasscodeWrap(): Promise<boolean> {
   const keyring = await readKeyring();
   return Boolean(keyring?.wrappedByPasscode && keyring.kdf);
+}
+
+/**
+ * Whether a keyring exists whose **only** way in is the old passcode wrap.
+ *
+ * The distinction from {@link hasLegacyPasscodeWrap} is a device wrap. A vault
+ * that has one can be opened by the device prompt, so the passcode wrap is dead
+ * weight to be dropped on the next successful unlock; a vault that has none can
+ * be opened by the passcode and by nothing else.
+ *
+ * That second shape is the one thing that must never accept *new* locks. Adding
+ * a folder or a link to it means sealing fresh content behind a secret the user
+ * may not have — which is exactly the trap where someone sets a lock and is then
+ * asked for a passcode they never chose. The conversion prompt is the only way
+ * forward, so it is offered before anything new is locked rather than after.
+ */
+export async function isPasscodeOnlyVault(): Promise<boolean> {
+  const keyring = await readKeyring();
+  if (!keyring) return false;
+  const hasPasscodeWrap = Boolean(keyring.wrappedByPasscode && keyring.kdf);
+  return hasPasscodeWrap && !keyring.wrappedByDevice;
 }
 
 /**

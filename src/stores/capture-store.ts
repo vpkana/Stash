@@ -35,8 +35,15 @@ export type CaptureStatus = 'idle' | 'open' | 'saving';
 
 export interface CaptureDraft {
   url: string;
+  /**
+   * The link's heading — the only field the user owns.
+   *
+   * A saved link used to carry a free-text note *as well as* a title, and the
+   * note was the field the row showed first. That was two ways to say the same
+   * thing, and it made "what is this" a question the user had to answer twice. A
+   * link has a title now; there is one place to name it and one place to edit it.
+   */
   title: string;
-  note: string;
   /** Verbatim shared text, kept for provenance and shown as context. */
   rawText: string;
   domain: string;
@@ -107,7 +114,7 @@ interface CaptureState {
    */
   openManual: (selection?: DestinationSelection) => void;
   setShowDestinationPicker: (value: boolean) => void;
-  setDraftField: (field: 'url' | 'title' | 'note', value: string) => void;
+  setDraftField: (field: 'url' | 'title', value: string) => void;
   setSaveOtherUrls: (value: boolean) => void;
   selectDestination: (selection: DestinationSelection) => void;
   /** Selects a destination, asking for access first when it is protected. */
@@ -132,7 +139,6 @@ function emptyDraft(): CaptureDraft {
   return {
     url: '',
     title: '',
-    note: '',
     rawText: '',
     domain: '',
     otherUrls: [],
@@ -173,19 +179,16 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
     }
 
     /*
-     * The note is pre-filled from whatever the source app already told us.
+     * The title is pre-filled from whatever the source app already told us.
      *
-     * A share usually arrives with a title (YouTube sends the video name, Chrome
-     * the page title), and asking the user to retype it would be busywork. It
-     * lands in the *note* rather than staying only in `title` because the note is
-     * the field the user owns: it is pre-filled for them, editable by them, and
-     * never rewritten afterwards. `title` is kept alongside as provenance — what
-     * the source claimed — so the two never have to be conflated.
+     * A share usually arrives with a heading (YouTube sends the video name,
+     * Chrome the page title), and asking the user to retype it would be busywork.
+     * It lands in the one field there is: the user can correct it, and it is
+     * never rewritten afterwards.
      */
     const draft: CaptureDraft = {
       url: parsed.draft.url,
       title: parsed.draft.title ?? '',
-      note: parsed.draft.note ?? parsed.draft.title ?? '',
       rawText: parsed.share.rawText,
       domain: parsed.draft.domain,
       otherUrls: parsed.draft.otherUrls,
@@ -335,7 +338,6 @@ export const useCaptureStore = create<CaptureState>((set, get) => ({
       folderId,
       isFavorite,
       ...(draft.title ? { title: draft.title } : {}),
-      ...(draft.note ? { userNote: draft.note } : {}),
       ...(draft.rawText ? { rawText: draft.rawText } : {}),
       source: draft.domain || domainOf(url),
       ...(draft.sourcePackage ? { sourcePackage: draft.sourcePackage } : {}),

@@ -102,6 +102,20 @@ export interface SavedLink extends Trashable {
   createdAt: number;
   updatedAt: number;
   lastOpenedAt?: number;
+  /**
+   * Explicit position within its folder, written by a drag.
+   *
+   * Optional, and its presence is the whole rule: a folder whose links have no
+   * positions is ordered newest-first (what a fresh vault wants), and once the
+   * user drags one row the list stops resorting itself under their hands. Absent
+   * on rows written before dragging existed, which is why it cannot be required.
+   *
+   * Deliberately **not** an indexed column: Dexie stores extra fields without a
+   * schema change, and an index would only be worth it if something queried links
+   * *by* position, which nothing does. Ordering happens in memory, where the list
+   * is already assembled.
+   */
+  sortOrder?: number;
   isFavorite: boolean;
   isArchived: boolean;
   /**

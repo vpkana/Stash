@@ -2,8 +2,10 @@
 
 import * as React from 'react';
 import { ChevronRight, Loader2, Lock } from '@/components/ui/icons';
+import type { DragRowProps } from '@/hooks/use-drag-sort';
 import { requireAccess } from '@/lib/privacy/access';
 import type { RevealKind } from '@/stores/privacy-store';
+import { DragGrip } from '@/components/ui/drag-grip';
 import { cn } from '@/lib/utils';
 
 /**
@@ -35,6 +37,19 @@ export interface LockedRowProps {
   subtitle?: string;
   onReveal: () => void;
   busy?: boolean;
+  /**
+   * Row props from {@link useDragSort}, when this list is reorderable.
+   *
+   * A locked row is reordered like any other, because *where a thing sits* is
+   * structure rather than content: it is already on screen, the reader learns
+   * nothing from moving it, and a list where two rows cannot be dragged because
+   * their contents are withheld would look broken rather than careful.
+   */
+  dragRow?: DragRowProps;
+  /** The companion to `dragRow`: true once, for the click that ends a lift. */
+  consumeDrag?: () => boolean;
+  /** Matches the grip offset of the row this one stands in for. */
+  gripClassName?: string;
   className?: string;
 }
 
@@ -44,13 +59,28 @@ const NOUNS: Record<RevealKind, string> = {
   link: 'Locked link',
 };
 
-export function LockedRow({ kind, label, subtitle, onReveal, busy = false, className }: LockedRowProps) {
+export function LockedRow({
+  kind,
+  label,
+  subtitle,
+  onReveal,
+  busy = false,
+  dragRow,
+  consumeDrag,
+  gripClassName,
+  className,
+}: LockedRowProps) {
   const title = label?.trim() ? label.trim() : NOUNS[kind];
   return (
-    <div className={cn('flex items-stretch', className)}>
+    <div {...dragRow} className={cn('flex items-stretch', dragRow?.className, className)}>
+      {dragRow ? <DragGrip className={gripClassName} /> : null}
       <button
         type="button"
-        onClick={onReveal}
+        onClick={() => {
+          // The lift that ends on this row is not also a tap that asks to open it.
+          if (consumeDrag?.()) return;
+          onReveal();
+        }}
         disabled={busy}
         aria-label={`${title} — unlock to open`}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-4 py-3.5 text-left active:bg-surface-2"

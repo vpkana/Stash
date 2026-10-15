@@ -9,6 +9,8 @@ import { openExternal } from '@/lib/open-external';
 import { destinationLabel, type DestinationSelection } from '@/lib/destination';
 import { useVaultStore, selectInboxLinks } from '@/stores/vault-store';
 import { requireFolderAccess } from '@/lib/privacy/access';
+import { linkPrimaryLabel } from '@/lib/link-label';
+import { useDragSort } from '@/hooks/use-drag-sort';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, PageTitle, Section } from '@/components/ui/page';
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -41,6 +43,33 @@ export default function InboxPage() {
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
   const [filingAll, setFilingAll] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+
+  /*
+   * The Inbox reorders like every other list of links: the same hook, the same
+   * handle, the same insertion line. It is the one list with no drop-out zone,
+   * because it is not a directory — there is no parent to drag something up into,
+   * and moving a link out of the Inbox is called filing, which stays a deliberate
+   * act in the row's sheet (or "File all", above).
+   *
+   * Built here rather than inside the list's render, like every other hook on this
+   * screen: the number of hooks must not depend on the data.
+   */
+  const inboxDrag = useDragSort({
+    ids: inbox.map((link) => link.id),
+    noun: 'link',
+    labelOf: (id) => {
+      const link = inbox.find((candidate) => candidate.id === id);
+      return link ? linkPrimaryLabel(link).text : 'link';
+    },
+    onReorder: (next) => {
+      void useVaultStore
+        .getState()
+        .setLinkOrder(null, next)
+        .then((ok) => {
+          if (!ok) toast('Could not save that order', { tone: 'danger' });
+        });
+    },
+  });
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -134,19 +163,23 @@ export default function InboxPage() {
       ) : (
         <Section title="Saved, not filed">
           <ListSurface>
-            {inbox.map((link) => (
+            {inbox.map((link, index) => (
               <LinkRow
                 key={link.id}
                 link={link}
-                onOpen={() => openLink(link)}
+                onOpen={openLink}
                 onToggleFavorite={() => void useVaultStore.getState().toggleLinkFavorite(link.id)}
                 onShowActions={() => setActiveLink(link)}
+                dragRow={inboxDrag.getRowProps(link.id, index)}
+                consumeDrag={inboxDrag.consumeDrag}
               />
             ))}
           </ListSurface>
           <p className="flex items-start gap-2 px-5 pt-3 text-meta leading-relaxed text-subtle">
             <InboxIcon size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
-            Tap ⋯ on a row to file one link, or use File all to move the whole Inbox somewhere at once.
+            {inbox.length > 1
+              ? 'Drag a row by its handle to arrange them. Tap ⋯ to file one link, or use File all to move the whole Inbox at once.'
+              : 'Tap ⋯ on a row to file one link, or use File all to move the whole Inbox somewhere at once.'}
           </p>
         </Section>
       )}
@@ -161,10 +194,16 @@ export default function InboxPage() {
         onSelect={(selection) => void fileAll(selection)}
       />
 
+      {/*
+        Filing a single link is offered here and nowhere else: every other list
+        of links is a folder, where dragging is the gesture, and the Inbox is the
+        one place with no parent to drag out to.
+      */}
       <LinkActionsSheet
         key={activeLink?.id ?? 'no-link'}
         link={activeLink}
         onClose={() => setActiveLink(null)}
+        allowMove
       />
     </>
   );

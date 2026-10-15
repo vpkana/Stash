@@ -85,9 +85,8 @@ export interface ShareDraft {
   domain: string;
   /** Friendly product name for the domain, e.g. `YouTube`. */
   sourceLabel?: string;
+  /** The heading the sender's app supplied, when it looks like one. */
   title?: string;
-  /** Verbatim shared text, preserved so nothing the sender wrote is lost. */
-  note?: string;
   sourcePackage?: string;
   appLabel?: string;
   receivedAt: number;
@@ -129,9 +128,6 @@ export function parseShareToDraft(input: ShareInput): ParsedShare {
   const title = deriveTitle(share, first);
   if (title) draft.title = title;
 
-  const note = deriveNote(share, title);
-  if (note) draft.note = note;
-
   return { share, draft };
 }
 
@@ -172,32 +168,6 @@ function looksLikeProse(value: string): boolean {
   const words = value.split(/\s+/).filter(Boolean).length;
   if (words > PROSE_MAX_WORDS) return true;
   return SENTENCE_END.test(value) && value.length >= PROSE_MIN_LENGTH;
-}
-
-/**
- * Keep the sender's own words when they add something the title did not
- * already capture. Returns undefined for the bare "Title https://url" case so
- * the UI does not show duplicated text.
- */
-export function deriveNote(share: IncomingShare, title?: string): string | undefined {
-  const raw = share.rawText.trim();
-  if (raw.length === 0) return undefined;
-
-  const { urls } = extractUrls(raw);
-  let withoutUrls = raw;
-  for (const url of urls) withoutUrls = withoutUrls.split(url).join(' ');
-  withoutUrls = normalizeWhitespace(withoutUrls);
-
-  if (title && withoutUrls.toLowerCase() === title.toLowerCase()) return undefined;
-  if (withoutUrls.length === 0) return undefined;
-
-  // Longer prose is worth keeping verbatim; short leftovers are just the title.
-  if (title && withoutUrls.toLowerCase().startsWith(title.toLowerCase())) {
-    const remainder = withoutUrls.slice(title.length).trim();
-    if (remainder.length === 0) return undefined;
-    return clamp(remainder, 2000);
-  }
-  return clamp(withoutUrls, 2000);
 }
 
 function normalizeWhitespace(value: string): string {

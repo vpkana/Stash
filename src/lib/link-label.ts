@@ -7,18 +7,18 @@ import { displayUrl } from './format';
  * One rule, used by the row, the capture sheet's preview and the duplicate
  * notice, so a link is never described two different ways in two places:
  *
- *  1. the user's own note — the words they chose to recognise it by, and the
- *     only field that is *theirs* rather than the source's;
- *  2. the title the sharing app supplied — real information, but not a decision
- *     the user made;
- *  3. the address, shortened, when there is nothing else. A link with no note and
- *     no title is not a failure; it just has nothing better to show.
+ *  1. the **title** — pre-filled from the sharing app's own heading when there
+ *     was one, and editable by the user afterwards. It is the single name a link
+ *     has, which is why there is no note branch any more: two fields describing
+ *     one thing was two chances for them to disagree;
+ *  2. the address, shortened, when there is no title. A link with no title is not
+ *     a failure; it just has nothing better to show.
  *
- * The URL is never replaced by any of these — it stays on the record and is what
+ * The URL is never replaced by either — it stays on the record and is what
  * tapping the row opens. This only decides which words are on the front of the
  * row.
  */
-export type LinkLabelKind = 'note' | 'title' | 'url';
+export type LinkLabelKind = 'title' | 'url';
 
 export interface LinkLabel {
   text: string;
@@ -26,9 +26,6 @@ export interface LinkLabel {
 }
 
 export function linkPrimaryLabel(link: SavedLink, urlWidth = 54): LinkLabel {
-  const note = link.userNote?.trim();
-  if (note) return { text: note, kind: 'note' };
-
   const title = link.title?.trim();
   if (title) return { text: title, kind: 'title' };
 

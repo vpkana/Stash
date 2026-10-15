@@ -3,17 +3,15 @@
 import * as React from 'react';
 import {
   ArrowLeft,
-  Check,
-  FolderInput,
   Lock,
-  Pencil,
+  Palette,
   Share2,
   Trash2,
   Unlock,
 } from '@/components/ui/icons';
 import type { Folder } from '@/db/types';
 import { FOLDER_ICON_CHOICES, Icon } from '@/components/ui/icon';
-import { canMoveFolder, descendantIdsOf, folderPathLabel, type MoveCheck } from '@/lib/tree';
+import { descendantIdsOf, folderPathLabel } from '@/lib/tree';
 import { pluralize } from '@/lib/format';
 import { folderDigest, shareOut } from '@/lib/share/share-out';
 import { useBackDismiss } from '@/hooks/use-back-dismiss';
@@ -21,12 +19,9 @@ import { useVaultStore } from '@/stores/vault-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { ActionList, ActionRow } from '@/components/ui/action-list';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
-import { FolderDestinationList } from '@/components/capture/folder-destination-list';
-import { INBOX_DESTINATION, folderDestination } from '@/lib/destination';
 
 /**
  * Folder management.
@@ -47,12 +42,21 @@ import { INBOX_DESTINATION, folderDestination } from '@/lib/destination';
  * different things. The page's button is the one that remains, and the place you
  * are standing is what decides where the folder goes.
  *
+ * There is no `move` state any more, and that is a deliberate subtraction rather
+ * than an omission: a folder moves by being dragged — reordered among its
+ * siblings, or dropped on the arrow above the list to leave its current directory
+ * — and a menu row listing the whole tree was a slower way to say the same thing.
+ *
  * There is no favourites row either. The star is on the folder row itself — one
  * tap, no sheet, and the state is visible without opening anything — so a second
  * copy of the same toggle in here would be the same mistake in a different place:
  * two controls for one act.
+ *
+ * `icon` names the *only* thing this sheet edits besides the lock and the trash.
+ * The name is edited in place, on the folder's own title, which is why there is no
+ * longer a rename form here — one field, one place, and no Save button.
  */
-type Mode = 'actions' | 'rename' | 'move' | 'delete';
+type Mode = 'actions' | 'icon' | 'delete';
 
 export interface FolderActionsSheetProps {
   folder: Folder | null;
@@ -70,9 +74,6 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
   const isProtected = useVaultStore((state) => state.protection.folders.has(protectedId));
   // Reset by remount: callers pass a `key` derived from the folder id.
   const [mode, setMode] = React.useState<Mode>('actions');
-  const [name, setName] = React.useState(folder?.name ?? '');
-  const [icon, setIcon] = React.useState<string>(folder?.icon ?? 'folder');
-  const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   const close = React.useCallback(() => {
@@ -105,38 +106,13 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
   if (!folder) return null;
 
   const parentLabel = folder.parentId ? folderPathLabel(folders, folder.parentId) : 'Top level';
-  const moveCheck: MoveCheck = canMoveFolder(folders, folder.id, folder.parentId);
 
-  const handleRename = async () => {
-    const trimmed = name.trim();
-    if (trimmed.length === 0) {
-      setError('Give the folder a name.');
-      return;
-    }
+  /** Apply an icon immediately: there is nothing else on this screen to confirm. */
+  const chooseIcon = async (choice: string) => {
     setBusy(true);
-    const ok = await useVaultStore.getState().renameFolder(folder.id, trimmed);
-    if (!ok) {
-      setBusy(false);
-      setError('Another folder here already uses that name.');
-      return;
-    }
-    if (icon !== (folder.icon ?? 'folder')) {
-      await useVaultStore.getState().setFolderEmojiIcon(folder.id, icon);
-    }
+    await useVaultStore.getState().setFolderEmojiIcon(folder.id, choice);
     setBusy(false);
-    toast('Folder updated', { tone: 'success' });
-    close();
-  };
-
-  const handleMove = async (targetParentId: string | null) => {
-    setBusy(true);
-    const result = await useVaultStore.getState().moveFolder(folder.id, targetParentId);
-    setBusy(false);
-    if (!result.ok) {
-      toast(result.reason, { tone: 'danger' });
-      return;
-    }
-    toast('Folder moved', { tone: 'success' });
+    toast('Folder icon updated', { tone: 'success' });
     close();
   };
 
@@ -199,10 +175,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
             {mode !== 'actions' ? (
               <button
                 type="button"
-                onClick={() => {
-                  setMode('actions');
-                  setError(null);
-                }}
+                onClick={() => setMode('actions')}
                 aria-label="Back"
                 className="tap -ml-1.5 flex size-9 shrink-0 items-center justify-center rounded-full text-accent active:bg-surface-2"
               >
@@ -211,13 +184,11 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
             ) : null}
             <div className="min-w-0 flex-1">
               <SheetTitle className="truncate">
-                {mode === 'rename'
-                  ? 'Rename folder'
-                  : mode === 'move'
-                    ? 'Move folder'
-                    : mode === 'delete'
-                      ? 'Delete folder?'
-                      : folder.name}
+                {mode === 'icon'
+                  ? 'Folder icon'
+                  : mode === 'delete'
+                    ? 'Delete folder?'
+                    : folder.name}
               </SheetTitle>
               <p className="mt-0.5 truncate text-meta text-subtle">
                 {mode === 'actions' ? `${parentLabel} · ${pluralize(impact?.total ?? 0, 'link')}` : folderPathLabel(folders, folder.id)}
@@ -227,62 +198,36 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
         </SheetHeader>
 
         <SheetBody>
-          {mode === 'rename' ? (
+          {mode === 'icon' ? (
             <div className="flex flex-col gap-3 px-3 pb-2">
-              <div className="flex items-center gap-2">
-                <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-muted">
-                  <Icon name={icon} size={20} strokeWidth={1.9} />
-                </span>
-                <Input
-                  value={name}
-                  autoFocus
-                  onChange={(event) => {
-                    setName(event.target.value);
-                    setError(null);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void handleRename();
-                    }
-                  }}
-                  aria-label="Folder name"
-                  enterKeyHint="done"
-                  maxLength={80}
-                />
+              <p className="text-meta leading-relaxed text-muted">
+                To rename this folder, tap its name at the top of the folder — there is no separate rename step.
+              </p>
+              <div className="flex flex-wrap gap-1.5 px-1 pb-1" role="radiogroup" aria-label="Folder icon">
+                {FOLDER_ICON_CHOICES.map((choice) => {
+                  const current = (folder.icon ?? 'folder') === choice;
+                  return (
+                    <button
+                      key={choice}
+                      type="button"
+                      role="radio"
+                      aria-checked={current}
+                      aria-label={choice}
+                      disabled={busy}
+                      onClick={() => void chooseIcon(choice)}
+                      className={cn(
+                        'tap flex size-10 items-center justify-center rounded-control border',
+                        current
+                          ? 'border-accent bg-accent-soft text-accent'
+                          : 'border-border bg-surface-2 text-subtle',
+                      )}
+                    >
+                      <Icon name={choice} size={17} strokeWidth={1.9} />
+                    </button>
+                  );
+                })}
               </div>
-              <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 no-scrollbar" role="radiogroup" aria-label="Folder icon">
-                {FOLDER_ICON_CHOICES.map((choice) => (
-                  <button
-                    key={choice}
-                    type="button"
-                    role="radio"
-                    aria-checked={icon === choice}
-                    aria-label={choice}
-                    onClick={() => setIcon(choice)}
-                    className={cn(
-                      'tap flex size-9 shrink-0 items-center justify-center rounded-xl border',
-                      icon === choice
-                        ? 'border-accent bg-accent-soft text-accent'
-                        : 'border-border bg-surface-2 text-subtle',
-                    )}
-                  >
-                    <Icon name={choice} size={16} strokeWidth={1.9} />
-                  </button>
-                ))}
-              </div>
-              {error ? (
-                <p className="rounded-lg bg-danger-soft px-3 py-2 text-meta text-danger">{error}</p>
-              ) : null}
             </div>
-          ) : mode === 'move' ? (
-            <FolderDestinationList
-              folders={folders}
-              selection={folder.parentId ? folderDestination(folder.parentId) : INBOX_DESTINATION}
-              onSelect={(selection) => void handleMove(selection.kind === 'folder' ? selection.folderId : null)}
-              showInbox
-              filterPlaceholder="Find a destination"
-            />
           ) : mode === 'delete' ? (
             <div className="flex flex-col gap-3 px-4 pb-2">
               <div className="pt-3">
@@ -317,14 +262,9 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
           ) : (
             <ActionList className="pb-2">
               <ActionRow
-                icon={<Pencil size={18} strokeWidth={1.9} aria-hidden />}
-                label="Rename or change icon"
-                onClick={() => setMode('rename')}
-              />
-              <ActionRow
-                icon={<FolderInput size={18} strokeWidth={1.9} aria-hidden />}
-                label="Move to another folder"
-                onClick={() => setMode('move')}
+                icon={<Palette size={18} strokeWidth={1.9} aria-hidden />}
+                label="Change icon"
+                onClick={() => setMode('icon')}
               />
               <ActionRow
                 icon={
@@ -386,7 +326,6 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
                 tone="danger"
                 onClick={() => setMode('delete')}
               />
-              {!moveCheck.ok ? <p className="text-label px-4 pb-3 text-subtle">{moveCheck.reason}</p> : null}
               {!keyringPresent ? (
                 <p className="text-label px-4 pb-3 leading-relaxed text-subtle">
                   Locking encrypts a folder and everything inside it. It opens with your device lock —
@@ -397,14 +336,7 @@ export function FolderActionsSheet({ folder, onClose, onDeleted }: FolderActions
           )}
         </SheetBody>
 
-        {mode === 'rename' ? (
-          <SheetFooter>
-            <Button variant="primary" size="lg" className="w-full" onClick={() => void handleRename()} disabled={busy}>
-              <Check size={18} strokeWidth={2.4} aria-hidden />
-              Save changes
-            </Button>
-          </SheetFooter>
-        ) : mode === 'actions' ? (
+        {mode === 'actions' ? (
           <SheetFooter>
             <Button variant="surface" className="w-full" onClick={close}>
               Close

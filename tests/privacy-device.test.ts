@@ -26,11 +26,21 @@ import {
   toExportedKeyring,
   unlockWithDevice,
 } from '@/lib/privacy/keyring';
-import { hasLegacyPasscodeWrap, openWithLegacyPasscode } from '@/lib/privacy/legacy-passcode';
+import {
+  hasLegacyPasscodeWrap,
+  isPasscodeOnlyVault,
+  openWithLegacyPasscode,
+} from '@/lib/privacy/legacy-passcode';
 import { isSealed } from '@/lib/privacy/protection';
 import { setSecureStore, UNAVAILABLE_SECURE_STORE } from '@/lib/privacy/secure-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
-import { memorySecureStore, setupLegacyPasscodeVault } from './privacy-fixtures';
+import {
+  addDeviceWrapKeepingPasscode,
+  makeKeyringPasscodeOnly,
+  memorySecureStore,
+  setupDeviceVault,
+  setupLegacyPasscodeVault,
+} from './privacy-fixtures';
 
 /**
  * Locking that asks the device instead of Stash.
@@ -141,6 +151,57 @@ describe('setting up with the device lock alone', () => {
   });
 });
 
+/**
+ * The same guard, from the other side — and the distinction the guard turns on.
+ *
+ * A build that offered a passcode and a device unlock together left keyrings with
+ * *both* wraps. The device prompt opens those, so they are ordinary vaults: they
+ * take new locks, and the leftover passcode wrap is dropped silently the moment
+ * the device path works (`unlockWithBiometrics`). Treating "has a passcode wrap"
+ * as "the passcode is the way in" is what would put an unnecessary password field
+ * in front of someone who never needed one.
+ */
+describe('a vault left with a device wrap beside a passcode', () => {
+  async function build(): Promise<void> {
+    await setupDeviceVault();
+    await makeKeyringPasscodeOnly('open sesame 42');
+    await addDeviceWrapKeepingPasscode();
+  }
+
+  it('reports the passcode as a fallback and not as the way in', async () => {
+    await build();
+    // `reload` is the honest way in: it reads the keyring and derives both facts
+    // from it, which is what a cold start does.
+    await usePrivacyStore.getState().reload();
+
+    const state = usePrivacyStore.getState();
+    expect(state.keyringPresent).toBe(true);
+    expect(state.legacyPasscodeAvailable).toBe(true);
+    expect(state.legacyPasscodeOnly).toBe(false);
+    expect(state.deviceUnlockReady).toBe(true);
+  });
+
+  it('still takes new locks, because the device opens what they seal', async () => {
+    await build();
+    expect(await usePrivacyStore.getState().ensureLocking()).toEqual({ ok: true });
+  });
+
+  it('drops the leftover passcode wrap on the first device unlock, asking nothing', async () => {
+    await build();
+    forgetVaultKey();
+
+    const unlocked = await usePrivacyStore.getState().unlockWithBiometrics();
+    expect(unlocked.ok).toBe(true);
+
+    // Gone from the record, not merely forgotten by the screen: the next start
+    // has nothing left to offer a passcode field for.
+    expect(await hasLegacyPasscodeWrap()).toBe(false);
+    await usePrivacyStore.getState().reload();
+    expect(usePrivacyStore.getState().legacyPasscodeAvailable).toBe(false);
+    expect(usePrivacyStore.getState().legacyPasscodeOnly).toBe(false);
+  });
+});
+
 describe('a device-locked vault has no passcode', () => {
   it('wraps the key once, under the device key, and nothing else', async () => {
     await createDeviceKeyring();
@@ -231,6 +292,43 @@ describe('a vault an earlier build locked with a passcode', () => {
     forgetVaultKey();
     setSecureStore(memorySecureStore());
     expect(await openWithLegacyPasscode('open sesame 42')).not.toBeNull();
+    expect(await hasLegacyPasscodeWrap()).toBe(true);
+  });
+});
+
+describe('locking new items in a vault that is still passcode-only', () => {
+  /*
+   * The reported bug, pinned at the layer that caused it.
+   *
+   * A vault left behind by the earlier build keeps its locks, and the app has to
+   * respect them. What it must not do is quietly accept *new* locks into it: the
+   * user would set a lock, and the next tap would ask for a passcode they never
+   * chose. Refusing, with a sentence that names the situation, is the only honest
+   * answer, and it is what stops the dead end from being reachable at all.
+   */
+  it('refuses, so nothing new is sealed behind a passcode the user never set', async () => {
+    await setupLegacyPasscodeVault('open sesame 42');
+    usePrivacyStore.setState({ keyringPresent: true });
+
+    const result = await usePrivacyStore.getState().ensureLocking();
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('old Stash passcode');
+  });
+
+  it('is a no-op on the vault this build creates', async () => {
+    await createDeviceKeyring();
+    usePrivacyStore.setState({ keyringPresent: true, legacyPasscodeOnly: false });
+    expect(await usePrivacyStore.getState().ensureLocking()).toEqual({ ok: true });
+  });
+
+  it('distinguishes a passcode-only vault from one that merely still carries a passcode wrap', async () => {
+    await createDeviceKeyring();
+    // Device-only: the prompt opens it, so the passcode is dead weight rather
+    // than the only way in.
+    expect(await isPasscodeOnlyVault()).toBe(false);
+
+    await makeKeyringPasscodeOnly('open sesame 42');
+    expect(await isPasscodeOnlyVault()).toBe(true);
     expect(await hasLegacyPasscodeWrap()).toBe(true);
   });
 });

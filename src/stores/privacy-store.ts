@@ -16,7 +16,11 @@ import {
   isSessionLocked,
   unlockWithDevice,
 } from '@/lib/privacy/keyring';
-import { hasLegacyPasscodeWrap, openWithLegacyPasscode } from '@/lib/privacy/legacy-passcode';
+import {
+  hasLegacyPasscodeWrap,
+  isPasscodeOnlyVault,
+  openWithLegacyPasscode,
+} from '@/lib/privacy/legacy-passcode';
 import { getSecureStore } from '@/lib/privacy/secure-store';
 import { clearEveryLock, countLocks, countSealed, reconcileProtection as reconcile, unsealEverything } from '@/lib/privacy/reconcile';
 import { applyScreenPrivacy } from '@/lib/privacy/screen';
@@ -131,6 +135,18 @@ export interface PrivacyState {
    * only one it can be found in, and the gate offers to convert it.
    */
   legacyPasscodeOnly: boolean;
+  /**
+   * Whether this vault still carries *any* old passcode wrap — including one
+   * alongside a device wrap.
+   *
+   * Deliberately a different fact from {@link legacyPasscodeOnly}. A keyring with
+   * both wraps is opened by the device prompt, and `unlockWithDevice` drops the
+   * passcode wrap silently the moment that path works; this flag exists only so
+   * the gate can offer the passcode as a *fallback* when the device path is
+   * unavailable or has just failed. Reading it as "the passcode is the way in" is
+   * the mistake that made an unlock ask for a password it did not need.
+   */
+  legacyPasscodeAvailable: boolean;
   /** Where the device key lives, so the copy can be specific rather than vague. */
   deviceStoreKind: DeviceStoreKind;
   unlocked: boolean;
@@ -309,16 +325,26 @@ export interface PrivacyState {
 }
 
 /**
- * The two facts the privacy UI needs to be specific about: can this vault be
- * opened here at all, and where does the device key live.
+ * What would it take to open this vault: is the old passcode the *only* way in,
+ * is there one at all, and where does the device key live.
  *
- * Asked as a pair because they are read together and both answer "what would it
- * take to open this vault".
+ * Asked together because they are read together. The first two are not the same
+ * question, and telling them apart is the whole fix for a lock that asked for a
+ * password the user never set: only a passcode-*only* keyring justifies leading
+ * with the conversion prompt. A vault that has a device wrap as well is opened by
+ * the device, and its leftover passcode wrap is dropped on the next successful
+ * device unlock rather than being put in front of anyone.
  */
-async function describeKeyring(present: boolean): Promise<[boolean, DeviceStoreKind]> {
+async function describeKeyring(
+  present: boolean,
+): Promise<[legacyPasscodeOnly: boolean, legacyPasscodeAvailable: boolean, deviceStoreKind: DeviceStoreKind]> {
   const store = await getSecureStore();
-  if (!present) return [false, store.kind];
-  return [await hasLegacyPasscodeWrap(), store.kind];
+  if (!present) return [false, false, store.kind];
+  const [onlyWayIn, anyPasscodeWrap] = await Promise.all([
+    isPasscodeOnlyVault(),
+    hasLegacyPasscodeWrap(),
+  ]);
+  return [onlyWayIn, anyPasscodeWrap, store.kind];
 }
 
 /**
@@ -362,6 +388,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   settings: { ...DEFAULT_PRIVACY_SETTINGS },
   keyringPresent: false,
   legacyPasscodeOnly: false,
+  legacyPasscodeAvailable: false,
   deviceStoreKind: 'unavailable',
   // Starts locked. On a cold start nothing is unlocked until the user says so,
   // which is what makes "after app restart the vault is locked" true by default
@@ -399,7 +426,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     // locking can be offered at all.
     const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
-    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(keyring);
+    const [legacyPasscodeOnly, legacyPasscodeAvailable, deviceStoreKind] = await describeKeyring(keyring);
 
     // With no keyring there is nothing to protect, so the session starts open.
     // With one, it starts locked: a cold start never inherits the last session's
@@ -412,6 +439,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       settings,
       keyringPresent: keyring,
       legacyPasscodeOnly,
+      legacyPasscodeAvailable,
       deviceStoreKind,
       deviceAuthAvailable,
       deviceUnlockReady,
@@ -441,13 +469,14 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     const authenticator = await getDeviceAuthenticator();
     const deviceAuthAvailable = await authenticator.isAvailable();
     const deviceUnlockReady = keyring ? await isDeviceUnlockReady() : false;
-    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(keyring);
+    const [legacyPasscodeOnly, legacyPasscodeAvailable, deviceStoreKind] = await describeKeyring(keyring);
 
     set({
       ready: true,
       settings,
       keyringPresent: keyring,
       legacyPasscodeOnly,
+      legacyPasscodeAvailable,
       deviceStoreKind,
       deviceAuthAvailable,
       deviceUnlockReady,
@@ -487,11 +516,12 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
   refreshCapabilities: async () => {
     const authenticator = await getDeviceAuthenticator();
     const deviceAuthAvailable = await authenticator.isAvailable();
-    const [legacyPasscodeOnly, deviceStoreKind] = await describeKeyring(get().keyringPresent);
+    const [legacyPasscodeOnly, legacyPasscodeAvailable, deviceStoreKind] = await describeKeyring(get().keyringPresent);
     set({
       deviceAuthAvailable,
       deviceUnlockReady: await isDeviceUnlockReady(),
       legacyPasscodeOnly,
+      legacyPasscodeAvailable,
       deviceStoreKind,
     });
     /*
@@ -559,6 +589,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       set({
         keyringPresent: false,
         legacyPasscodeOnly: false,
+        legacyPasscodeAvailable: false,
         deviceUnlockReady: false,
         unlocked: true,
         unlockedAt: null,
@@ -642,6 +673,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       settings,
       keyringPresent: true,
       legacyPasscodeOnly: false,
+      legacyPasscodeAvailable: false,
       deviceUnlockReady: true,
       unlocked: true,
       unlockedAt: Date.now(),
@@ -656,7 +688,31 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     // Asked of the keyring rather than the cached flag: an import can install a
     // keyring underneath us, and "is there anything to set up" is a fact about
     // the key, not about the last render.
-    if (get().keyringPresent || (await hasKeyring())) return { ok: true };
+    if (get().keyringPresent || (await hasKeyring())) {
+      /*
+       * A vault whose old passcode wrap is still the only thing that opens it
+       * must not take on *new* locks.
+       *
+       * Reusing such a keyring would seal the item the user just asked to lock
+       * under that passcode — so the very next tap asks them for a secret they
+       * never chose, which is the dead end this guard exists to prevent. The
+       * vault is converted once (the gate and Settings both offer exactly that)
+       * and locking works normally afterwards.
+       *
+       * The test is the *pair*, not the passcode wrap on its own: a keyring that
+       * still carries a passcode wrap next to a device wrap is opened by the
+       * device, so it is an ordinary vault and new locks are openable here. On a
+       * machine where the device path is not ready — a keyring restored from a
+       * backup, say — the passcode would be the only way in, and that is the case
+       * this refuses.
+       */
+      if ((await hasLegacyPasscodeWrap()) && !(await isDeviceUnlockReady())) {
+        const message =
+          'This vault is still locked by the old Stash passcode. Open one locked item to move it to your device lock, then you can lock new things here.';
+        return { ok: false, message };
+      }
+      return { ok: true };
+    }
     return get().enableLocking();
   },
 
@@ -720,6 +776,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
           busy: false,
           keyringPresent: false,
           legacyPasscodeOnly: false,
+          legacyPasscodeAvailable: false,
           deviceUnlockReady: false,
           unlocked: true,
           unlockedAt: null,
@@ -845,6 +902,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       settings,
       keyringPresent: false,
       legacyPasscodeOnly: false,
+      legacyPasscodeAvailable: false,
       unlocked: true,
       unlockedAt: null,
       grantedRoots: [],
@@ -951,7 +1009,12 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       backgroundedAt: null,
       message: null,
       revealRequest: null,
-      ...(dropped ? { legacyPasscodeOnly: false } : {}),
+      /*
+       * Both facts, because a successful device unlock consumes the wrap:
+       * leaving `legacyPasscodeAvailable` set would leave the gate offering a
+       * passcode field for a wrap that is no longer there.
+       */
+      ...(dropped ? { legacyPasscodeOnly: false, legacyPasscodeAvailable: false } : {}),
     });
     if (opened) get().grant(opened);
     syncScreenPrivacy(settings.secureScreen, true);
@@ -1027,6 +1090,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       settings,
       keyringPresent: false,
       legacyPasscodeOnly: false,
+      legacyPasscodeAvailable: false,
       unlocked: true,
       unlockedAt: null,
       grantedRoots: [],

@@ -5,11 +5,16 @@ import {
   deriveWrappingKey,
   encryptString,
   exportKeyBytes,
+  fromBase64,
+  importKeyBytes,
   newSalt,
   PBKDF2_ITERATIONS,
   toBase64,
 } from '@/lib/privacy/crypto';
-import type { SecureStore } from '@/lib/privacy/secure-store';
+import { getSecureStore, type SecureStore } from '@/lib/privacy/secure-store';
+
+/** The name `keyring.ts` stores the device key under. Unchanged since it was introduced. */
+const DEVICE_KEY_NAME = 'stash.privacy.deviceKey';
 
 /**
  * Shared fixtures for the privacy suites.
@@ -22,7 +27,9 @@ import type { SecureStore } from '@/lib/privacy/secure-store';
  *  - **the legacy vault**, which is what an earlier build left behind: the vault
  *    key wrapped under a Stash passcode, with no device wrap at all. Tests use it
  *    for the state where *nothing* can prompt for the vault — the only state in
- *    which the gate has to ask a person for something.
+ *    which the gate has to ask a person for something. Two flavours are built
+ *    from it: passcode-*only*, and the older shape that also kept a device wrap,
+ *    which the app must never mistake for the first.
  *
  * The legacy keyring is written with the same primitives the old setup path used
  * rather than as a hand-shaped object. That matters: a fixture would be our guess
@@ -96,6 +103,37 @@ export async function makeKeyringPasscodeOnly(passcode: string): Promise<void> {
 export async function setupLegacyPasscodeVault(passcode: string): Promise<void> {
   await setupDeviceVault();
   await makeKeyringPasscodeOnly(passcode);
+}
+
+/**
+ * Put a device wrap *back* onto a passcode-wrapped vault, keeping both.
+ *
+ * This is the shape a build that offered a passcode and a device unlock side by
+ * side left behind, and the one the product has to be able to tell apart from a
+ * passcode-only vault: the device prompt opens it, so the leftover passcode wrap
+ * is dead weight to be dropped silently rather than a field to put in front of
+ * somebody. It has to be assembled here because nothing in this build writes a
+ * keyring with two wraps — which is the point.
+ *
+ * Uses the device key the secure store already holds (from `setupDeviceVault`),
+ * so the resulting wrap is a real one rather than a hand-shaped object.
+ */
+export async function addDeviceWrapKeepingPasscode(): Promise<void> {
+  const vault = getVaultKey();
+  if (!vault) throw new Error('the session has no vault key to wrap');
+
+  const store = await getSecureStore();
+  const stored = await store.get(DEVICE_KEY_NAME);
+  if (!stored) throw new Error('the secure store holds no device key');
+
+  const deviceKey = await importKeyBytes(fromBase64(stored));
+  const wrappedByDevice = await encryptString(deviceKey, toBase64(await exportKeyBytes(vault)));
+
+  const existing = await db.security.get(SECURITY_KEYS.keyring);
+  await db.security.put({
+    key: SECURITY_KEYS.keyring,
+    value: { ...(existing?.value as object), wrappedByDevice, updatedAt: Date.now() },
+  });
 }
 
 /**

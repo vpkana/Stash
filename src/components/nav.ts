@@ -22,11 +22,11 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'Home', icon: Home, hint: 'What you just saved' },
-  { href: '/library', label: 'Library', icon: Library, hint: 'Folders and tags' },
-  { href: '/notes', label: 'Notes', icon: NotebookPen, hint: 'Your own writing' },
-  { href: '/search', label: 'Search', icon: Search, hint: 'Find anything' },
-  { href: '/settings', label: 'Settings', icon: Settings, hint: 'Locking, backup, data' },
+  { href: '/', label: 'Home', icon: Home, hint: '' },
+  { href: '/library', label: 'Library', icon: Library, hint: '' },
+  { href: '/notes', label: 'Notes', icon: NotebookPen, hint: '' },
+  { href: '/search', label: 'Search', icon: Search, hint: '' },
+  { href: '/settings', label: 'Settings', icon: Settings, hint: '' },
 ];
 
 /**

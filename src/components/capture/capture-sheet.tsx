@@ -194,6 +194,7 @@ export function CaptureSheet() {
     <Sheet open onOpenChange={(next) => !next && close()}>
       <SheetContent
         showHandle={!fullScreen}
+        fullBleedOnDesktop={fullScreen}
         className={fullScreen ? 'inset-0 max-h-none rounded-none border-t-0 pt-safe' : undefined}
         onOpenAutoFocus={(event) => {
           if (mode === 'manual') {
@@ -237,7 +238,6 @@ export function CaptureSheet() {
                 mode={mode}
                 url={draft.url}
                 title={draft.title}
-                note={draft.note}
                 domain={draft.domain}
                 sourceLabel={draft.sourceLabel}
                 appLabel={draft.appLabel}
@@ -438,7 +438,6 @@ interface LinkPreviewProps {
   mode: 'share' | 'manual';
   url: string;
   title: string;
-  note: string;
   domain: string;
   sourceLabel?: string;
   appLabel?: string;
@@ -446,7 +445,7 @@ interface LinkPreviewProps {
   saveOtherUrls: boolean;
   error: string | null;
   urlInputRef: React.RefObject<HTMLInputElement | null>;
-  onFieldChange: (field: 'url' | 'title' | 'note', value: string) => void;
+  onFieldChange: (field: 'url' | 'title', value: string) => void;
   onToggleOthers: (value: boolean) => void;
 }
 
@@ -459,7 +458,6 @@ function LinkPreview({
   mode,
   url,
   title,
-  note,
   domain,
   sourceLabel,
   otherUrls,
@@ -509,33 +507,26 @@ function LinkPreview({
             autoComplete="off"
             maxLength={200}
           />
-          <Input
-            value={note}
-            onChange={(event) => onFieldChange('note', event.target.value)}
-            placeholder="Note (optional)"
-            aria-label="Note"
-            maxLength={500}
-          />
         </div>
       ) : (
         /*
          * A share gets one field, not a form.
          *
-         * The whole point of saving from the share sheet is speed, so the note is
-         * the only thing offered for editing — pre-filled from the source's title
-         * when there was one, and always optional. The address is shown as context
+         * The whole point of saving from the share sheet is speed, so the title
+         * — pre-filled from the source's own heading, and always optional — is
+         * the only thing offered for editing. The address is shown as context
          * rather than as an input: the user did not come here to retype a URL, and
          * the shared one is already exactly right.
          */
         <div className="mt-2 flex flex-col gap-2">
           <Input
-            value={note}
-            onChange={(event) => onFieldChange('note', event.target.value)}
-            placeholder="Add a note (optional)"
-            aria-label="Note"
+            value={title}
+            onChange={(event) => onFieldChange('title', event.target.value)}
+            placeholder="Add a title (optional)"
+            aria-label="Title"
             autoComplete="off"
             enterKeyHint="done"
-            maxLength={500}
+            maxLength={200}
           />
           <p className="truncate text-meta text-subtle">{displayUrl(url, 90)}</p>
         </div>

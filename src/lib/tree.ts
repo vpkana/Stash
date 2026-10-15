@@ -384,6 +384,26 @@ export function orderedSiblingIds(folders: readonly Folder[], parentId: string |
   return childrenOf(folders, parentId).map((folder) => folder.id);
 }
 
+/**
+ * The display order of a run of links — one folder's, or the Inbox's.
+ *
+ * **An explicit order wins; until there is one, newest first.** That is the rule
+ * that makes dragging a decision rather than a lottery: a fresh list shows links
+ * by recency (which is what "what did I just save" wants), and the moment the user
+ * drags a row every row in that list has a position and it stops reshuffling
+ * itself under their hands. Checking *all* of them — rather than per-row — is what
+ * keeps the two orderings from interleaving into a list that is neither.
+ *
+ * Shared between the Library folder and the Inbox so the two cannot drift into
+ * disagreeing about what an explicit order means.
+ */
+export function orderedLinks(list: readonly SavedLink[]): SavedLink[] {
+  if (list.length > 0 && list.every((link) => typeof link.sortOrder === 'number')) {
+    return [...list].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  }
+  return [...list].sort((a, b) => b.createdAt - a.createdAt);
+}
+
 export function hasSiblingWithName(
   folders: readonly Folder[],
   parentId: string | null,

@@ -5,6 +5,7 @@ import { Fingerprint, Loader2, Lock, ShieldCheck, Unlock } from '@/components/ui
 import { devicePromptName, devicePromptTitle } from '@/lib/privacy/auth';
 import {
   LEGACY_PASSCODE_EXPLANATION,
+  LEGACY_PASSCODE_FIELD_LABEL,
   LEGACY_PASSCODE_HEADLINE,
 } from '@/lib/privacy/legacy-passcode';
 import { shouldPromptForReveal } from '@/lib/privacy/session';
@@ -79,6 +80,7 @@ export function LockGate() {
 
 function GateDialog() {
   const legacyPasscodeOnly = usePrivacyStore((state) => state.legacyPasscodeOnly);
+  const legacyPasscodeAvailable = usePrivacyStore((state) => state.legacyPasscodeAvailable);
   const deviceAuthAvailable = usePrivacyStore((state) => state.deviceAuthAvailable);
   const deviceUnlockReady = usePrivacyStore((state) => state.deviceUnlockReady);
   const deviceStoreKind = usePrivacyStore((state) => state.deviceStoreKind);
@@ -94,6 +96,19 @@ function GateDialog() {
 
   const devicePath = deviceAuthAvailable && deviceUnlockReady;
   const noun = revealRequest ? NOUNS[revealRequest.kind] : 'Locked item';
+
+  /*
+   * The passcode field on the *device* screen.
+   *
+   * Offered only for a vault that still carries an old passcode wrap next to a
+   * device wrap — never for one this build created — and only when the device
+   * path cannot do the job: no usable prompt on this machine (a keyring restored
+   * from a backup, a computer with no enrolled credential), or a prompt that has
+   * just failed. Without it, the message above would name the passcode and give
+   * the user nowhere to type it; with it, the prompt leads and the passcode is
+   * what it should be here, which is a way through rather than the way in.
+   */
+  const offerLegacyPasscode = legacyPasscodeAvailable && (!devicePath || message !== null);
 
   const submit = React.useCallback(async () => {
     if (passcode.length === 0) return;
@@ -122,7 +137,7 @@ function GateDialog() {
 
             <div className="mt-4">
               <PasscodeInput
-                label="The passcode you used before"
+                label={LEGACY_PASSCODE_FIELD_LABEL}
                 value={passcode}
                 onChange={(value) => setPasscode(value)}
                 onSubmit={() => void submit()}
@@ -185,11 +200,36 @@ function GateDialog() {
               </p>
             ) : null}
 
-            {keyringPresent && !devicePath ? (
+            {keyringPresent && !devicePath && !offerLegacyPasscode ? (
               <p className="text-meta mt-3 leading-relaxed text-subtle">
                 A screen lock, fingerprint or face is what opens this vault now. Set one up in your device
                 settings and it opens again — the items are still here, encrypted as they were.
               </p>
+            ) : null}
+
+            {offerLegacyPasscode ? (
+              <div className="mt-4 border-t border-border pt-3">
+                <PasscodeInput
+                  label={LEGACY_PASSCODE_FIELD_LABEL}
+                  value={passcode}
+                  onChange={setPasscode}
+                  onSubmit={() => void submit()}
+                  disabled={busy}
+                />
+                <Button
+                  variant="surface"
+                  size="lg"
+                  className="mt-2 w-full"
+                  disabled={busy || passcode.length === 0}
+                  onClick={() => void submit()}
+                >
+                  Open with the old passcode
+                </Button>
+                <p className="text-meta mt-2 leading-relaxed text-subtle">
+                  An older version of Stash locked these items with a passcode. Entering it once moves the
+                  vault to your device lock, and it is not asked for again.
+                </p>
+              </div>
             ) : null}
           </>
         )}

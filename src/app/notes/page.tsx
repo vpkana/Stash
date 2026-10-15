@@ -84,12 +84,14 @@ function NotesView() {
       childCounts.set(note.parentNoteId, (childCounts.get(note.parentNoteId) ?? 0) + 1);
     }
 
-    // Counted from the same withheld set the lists use: a "3 links" badge on a
-    // note, where those links are locked, would be a count of something the user
-    // cannot see.
+    /*
+     * Counted from every link the note references — locked ones included, for
+     * the same reason the rows are: a "3 links" badge that drops the locked one
+     * would disagree with the list directly underneath it. What the lock hides is
+     * the link's content, not the fact that it is attached.
+     */
     const linkCounts = new Map<string, number>();
     for (const row of noteLinks) {
-      if (hiddenLinks.has(row.linkId)) continue;
       linkCounts.set(row.noteId, (linkCounts.get(row.noteId) ?? 0) + 1);
     }
 
@@ -114,13 +116,17 @@ function NotesView() {
         ...noteLinks
           .filter((row) => row.noteId === current.id)
           .sort((a, b) => a.sortOrder - b.sortOrder)
+          // Locked links stay in the list and render as locked rows: a link
+          // attached to this note that disappears when it is locked is the same
+          // "it vanished" problem this app keeps refusing to have. The row
+          // subscribes to the lock itself, so this list does not have to.
           .map((row) => linkById.get(row.linkId))
-          .filter((link): link is SavedLink => Boolean(link) && !hiddenLinks.has(link!.id)),
+          .filter((link): link is SavedLink => Boolean(link)),
       );
     }
 
     return { childCounts, linkCounts, trail, subnotes, resources };
-  }, [current, links, noteLinks, notes, visibleNotes, hiddenLinks]);
+  }, [current, links, noteLinks, notes, visibleNotes]);
 
   /**
    * What could become a subnote of the note being read.

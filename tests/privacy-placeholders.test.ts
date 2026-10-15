@@ -2,7 +2,7 @@ import Dexie from 'dexie';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, openDatabase } from '@/db';
 import { createFolder, setFolderLocked } from '@/db/repos/folders';
-import { createLink } from '@/db/repos/links';
+import { createLink, setLinkLocked } from '@/db/repos/links';
 import { createStaticAuthenticator, setDeviceAuthenticator } from '@/lib/privacy/auth';
 import { forgetVaultKey, isSessionLocked } from '@/lib/privacy/keyring';
 import { isSealed } from '@/lib/privacy/protection';
@@ -184,6 +184,49 @@ describe('a locked folder in the tree', () => {
     expect(state.hidden.links.has(ids.inside)).toBe(false);
     // The sibling branch was never protected, so it never had to be opened.
     expect(state.hidden.folders.has(ids.open)).toBe(false);
+  });
+});
+
+describe('an individually locked link', () => {
+  /*
+   * The other vanishing bug, and the more dangerous one: a link locked on its own
+   * (no locked folder anywhere) used to be filtered out of every list, so the row
+   * was simply gone. The Inbox is the list an unfiled link lives in, so that is
+   * where the row has to survive — with nothing readable on it.
+   */
+  it('keeps its row in the Inbox while losing every readable field', async () => {
+    const link = await createLink({
+      url: 'https://example.com/therapy-notes',
+      folderId: null,
+      title: 'Notes from the first session',
+    });
+    await setLinkLocked(link.id, true);
+    forgetVaultKey();
+    await useVaultStore.getState().refresh();
+
+    const state = useVaultStore.getState();
+    expect(state.hidden.links.has(link.id)).toBe(true);
+    // Still listed, so it is reachable and a tap can raise the prompt.
+    expect(state.inboxLinks.some((candidate) => candidate.id === link.id)).toBe(true);
+    // And carrying no address, no title and no snippet, so listing it leaks the
+    // fact that something is there and nothing else.
+    const listed = state.inboxLinks.find((candidate) => candidate.id === link.id);
+    expect(listed?.title).toBeUndefined();
+    expect(listed?.url).toBe('');
+    expect(JSON.stringify(await db.links.get(link.id))).not.toContain('therapy');
+  });
+
+  it('leaves an ordinary link fully listed beside it', async () => {
+    const kept = await createLink({ url: 'https://example.com/kept', folderId: null, title: 'Kept' });
+    const locked = await createLink({ url: 'https://example.com/locked', folderId: null });
+    await setLinkLocked(locked.id, true);
+    forgetVaultKey();
+    await useVaultStore.getState().refresh();
+
+    const state = useVaultStore.getState();
+    const ordinary = state.inboxLinks.find((candidate) => candidate.id === kept.id);
+    expect(ordinary?.url).toBe('https://example.com/kept');
+    expect(state.hidden.links.has(kept.id)).toBe(false);
   });
 });
 

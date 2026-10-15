@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, FolderPlus, FolderTree, Layers, Lock, Star } from '@/components/ui/icons';
 import type { Folder, Note, SavedLink } from '@/db/types';
-import { breadcrumbOf, childrenOf, descendantIdsOf, folderPathLabel } from '@/lib/tree';
+import { breadcrumbOf, childrenOf, descendantIdsOf, folderPathLabel, orderedLinks } from '@/lib/tree';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { useFolderAccess } from '@/lib/privacy/access';
@@ -17,6 +17,9 @@ import {
 } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, Section } from '@/components/ui/page';
+import { DropOutZone } from '@/components/ui/drop-out-zone';
+import { InlineTitle } from '@/components/folders/inline-title';
+import { linkPrimaryLabel } from '@/lib/link-label';
 import { Icon, isIconName } from '@/components/ui/icon';
 import { IdentityTile } from '@/components/ui/identity-tile';
 import { identityColor } from '@/lib/identity-color';
@@ -109,25 +112,75 @@ function LibraryView() {
           if (!ok) toast('Could not save that order', { tone: 'danger' });
         });
     },
+    // Only inside a folder: at the top level there is nowhere further out.
+    ...(currentId
+      ? {
+          onDropOut: (folderId: string) => {
+            const parentId = currentFolder?.parentId ?? null;
+            void moveOut(() => useVaultStore.getState().moveFolder(folderId, parentId));
+          },
+        }
+      : {}),
   });
 
+  /*
+   * Every link under the current folder, locked ones included.
+   *
+   * Locked links used to be filtered out here, and that was the bug the user hit:
+   * lock one link and it simply disappeared, with no way to tell whether it was
+   * hidden or gone. Withheld rows now stay in the list and render as locked rows
+   * (their content is already stripped to nothing in the store), so the row keeps
+   * its place and a tap is what raises the prompt.
+   */
   const folderLinks = React.useMemo(() => {
     const ids = new Set<string>();
     if (currentId) {
       ids.add(currentId);
       for (const id of descendantIdsOf(folders, currentId)) ids.add(id);
     }
-    return links
-      .filter(
-        (link) =>
-          !hidden.links.has(link.id) &&
-          (currentId ? link.folderId !== null && ids.has(link.folderId) : true),
-      )
-      .sort((a, b) => b.createdAt - a.createdAt);
-  }, [currentId, folders, links, hidden]);
+    return links.filter((link) =>
+      currentId ? link.folderId !== null && ids.has(link.folderId) : true,
+    );
+  }, [currentId, folders, links]);
 
-  const directLinks = currentId ? folderLinks.filter((link) => link.folderId === currentId) : folderLinks;
+  const directLinks = React.useMemo(
+    () =>
+      currentId
+        ? orderedLinks(folderLinks.filter((link) => link.folderId === currentId))
+        : folderLinks,
+    [currentId, folderLinks],
+  );
   const nestedCount = folderLinks.length - directLinks.length;
+
+  /*
+   * Links drag the same way folders do — the same hook, the same handle, the same
+   * drop-out target — because "I can reorder the folders but not the links" is a
+   * rule with no reason behind it.
+   */
+  const linkDrag = useDragSort({
+    ids: directLinks.map((link) => link.id),
+    noun: 'link',
+    labelOf: (id) => {
+      const link = directLinks.find((candidate) => candidate.id === id);
+      return link ? linkPrimaryLabel(link).text : 'link';
+    },
+    onReorder: (next) => {
+      void useVaultStore
+        .getState()
+        .setLinkOrder(currentId, next)
+        .then((ok) => {
+          if (!ok) toast('Could not save that order', { tone: 'danger' });
+        });
+    },
+    ...(currentId
+      ? {
+          onDropOut: (linkId: string) => {
+            const parentId = currentFolder?.parentId ?? null;
+            void moveOut(() => useVaultStore.getState().moveLink(linkId, parentId));
+          },
+        }
+      : {}),
+  });
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -158,11 +211,28 @@ function LibraryView() {
     );
   };
 
-  const totalLinks = links.filter((link) => !hidden.links.has(link.id)).length;
+  /** Where "move out" lands: the parent of the folder being viewed, or the top. */
+  const parentLabel = currentFolder?.parentId
+    ? folderPathLabel(folders, currentFolder.parentId)
+    : 'the top level';
+
+  /*
+   * Everything saved counts, and every row is present — locked ones included.
+   *
+   * These used to filter out withheld items, which meant a locked link could be
+   * listed in the folder and still be missing from the totals and the favourites
+   * above it: the same "it vanished" problem, wearing a smaller hat. The rows
+   * gate their own content (a locked link's address and title are already blank
+   * in the store), so a filter here only ever removed the *row*.
+   */
+  const totalLinks = links.length;
+  // Like every derived view, favourites summarise what the session may read, so
+  // a locked favourite is left to the tree (where it has a locked row) rather
+  // than repeated here — see `favoriteFolders` in the vault store.
   const favoriteLinks = links
     .filter((link) => link.isFavorite && !hidden.links.has(link.id))
     .slice(0, 4);
-  const visibleFolders = folders.filter((folder) => !hidden.folders.has(folder.id));
+  const folderCount = folders.length;
 
   /*
    * A protected folder the session has not stepped into renders as a notice, not
@@ -263,9 +333,30 @@ function LibraryView() {
                   />
                 </IdentityTile>
               ) : null}
-              <h1 className="text-display truncate font-semibold text-fg">
-                {currentFolder?.name ?? 'All folders'}
-              </h1>
+              {/*
+                The name is the field.
+
+                Clicking it puts a caret in it — no sheet, no Rename row, no Save
+                button — and leaving the field keeps the change. Renaming used to be
+                a four-step detour for one word, which is why it is now the same
+                gesture Notion uses for a page title.
+              */}
+              {currentFolder ? (
+                <InlineTitle
+                  value={currentFolder.name}
+                  ariaLabel="Folder name"
+                  className="text-display font-semibold text-fg"
+                  onCommit={async (next) => {
+                    const ok = await useVaultStore
+                      .getState()
+                      .renameFolder(currentFolder.id, next);
+                    if (!ok) toast('Another folder here already uses that name', { tone: 'danger' });
+                    return ok;
+                  }}
+                />
+              ) : (
+                <h1 className="text-display truncate font-semibold text-fg">All folders</h1>
+              )}
               {currentFolder?.isFavorite ? (
                 <Star size={15} strokeWidth={2.2} className="shrink-0 fill-warning text-warning" aria-hidden />
               ) : null}
@@ -273,7 +364,7 @@ function LibraryView() {
             <p className="mt-0.5 truncate text-meta text-muted">
               {currentId
                 ? `${pluralize(directLinks.length, 'link')} here${nestedCount > 0 ? ` · ${nestedCount} below` : ''}${subfolders.length > 0 ? ` · ${pluralize(subfolders.length, 'subfolder')}` : ''}`
-                : `${pluralize(visibleFolders.length, 'folder')} · ${pluralize(totalLinks, 'link')}`}
+                : `${pluralize(folderCount, 'folder')} · ${pluralize(totalLinks, 'link')}`}
             </p>
           </div>
 
@@ -391,7 +482,7 @@ function LibraryView() {
                 key={link.id}
                 link={link}
                 context={folderPathLabel(folders, link.folderId)}
-                onOpen={() => openLink(link)}
+                onOpen={openLink}
                 onToggleFavorite={() => void toggleLinkFavorite(link.id)}
                 onShowActions={() => setActiveLink(link)}
               />
@@ -431,6 +522,18 @@ function LibraryView() {
 
       {subfolders.length > 0 ? (
         <Section title={currentId === null ? 'Folders' : 'Subfolders'}>
+          {/*
+            The way out of this folder, above the list so a row dragged upward
+            meets it on the way. It names the destination rather than the gesture:
+            "Move out to Development" is a sentence the user can check before they
+            let go.
+          */}
+          {currentId !== null ? (
+            <DropOutZone
+              zoneProps={folderDrag.getOutZoneProps()}
+              label={`Move out to ${parentLabel}`}
+            />
+          ) : null}
           <ListSurface>
             {subfolders.map((folder, index) => {
               const stats = folderStats.get(folder.id);
@@ -457,21 +560,35 @@ function LibraryView() {
            * just clutter.
            */}
           {subfolders.length > 1 ? (
-            <p className="text-meta px-5 pt-2 text-subtle">Press and hold a folder to drag it into a new order.</p>
+            <p className="text-meta px-5 pt-2 text-subtle">
+              Drag a row by its handle to reorder it.
+            </p>
           ) : null}
         </Section>
       ) : null}
 
-      {directLinks.length > 0 ? (
+      {/*
+       * Links belong to a folder, not to the root of the Library.
+       *
+       * The root used to list every saved link in the vault under a "Links"
+       * heading — a second, worse copy of Home's recent list on the one screen
+       * whose job is structure. Inside a folder it is the opposite: those are the
+       * links that live *there*, and hiding them is what made a locked one look
+       * lost. So the section exists only when the user has stepped into a folder.
+       */}
+      {currentId !== null && directLinks.length > 0 ? (
         <Section title={nestedCount > 0 ? 'Links here' : 'Links'}>
+          <DropOutZone zoneProps={linkDrag.getOutZoneProps()} label={`Move out to ${parentLabel}`} />
           <ListSurface>
-            {directLinks.map((link) => (
+            {directLinks.map((link, index) => (
               <LinkRow
                 key={link.id}
                 link={link}
-                onOpen={() => openLink(link)}
+                onOpen={openLink}
                 onToggleFavorite={() => void toggleLinkFavorite(link.id)}
                 onShowActions={() => setActiveLink(link)}
+                dragRow={linkDrag.getRowProps(link.id, index)}
+                consumeDrag={linkDrag.consumeDrag}
               />
             ))}
           </ListSurface>
@@ -529,4 +646,22 @@ export default function LibraryPage() {
       <LibraryView />
     </React.Suspense>
   );
+}
+
+/**
+ * Run a drag-out move and report it.
+ *
+ * Wrapped so the two drop targets share one piece of feedback: a move that the
+ * vault refused — a name clash, a folder that is its own ancestor — has to say so
+ * rather than leaving the row where it was with no explanation.
+ */
+async function moveOut(move: () => Promise<unknown>): Promise<void> {
+  const outcome = await move();
+  const failed = typeof outcome === 'object' && outcome !== null && 'ok' in outcome && !outcome.ok;
+  if (failed) {
+    const reason = (outcome as { reason?: string }).reason;
+    toast(reason ?? 'Could not move that', { tone: 'danger' });
+    return;
+  }
+  toast('Moved out one level', { tone: 'success' });
 }

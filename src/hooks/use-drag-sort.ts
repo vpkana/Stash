@@ -53,6 +53,15 @@ export interface DragSortState {
   draggingId: string | null;
   /** Where it would land, as an index into the list the caller passed. */
   overIndex: number | null;
+  /** True while the dragged row is over the caller's "move out" zone. */
+  overOut: boolean;
+}
+
+/** Props for a "move out of this directory" drop target. */
+export interface DragOutZoneProps {
+  ref: (element: HTMLElement | null) => void;
+  'data-drop-out': boolean;
+  'data-drop-out-active': boolean;
 }
 
 /** Props for the draggable row, spread onto the row's own root element. */
@@ -86,12 +95,31 @@ export interface UseDragSortOptions {
   noun?: string;
   /** Accessible name of each row, so the row can say what it moves. */
   labelOf: (id: string) => string;
+  /**
+   * Called when the drag ends over the caller's "move out" zone.
+   *
+   * This is how an item leaves its current directory: the alternative was a
+   * `Move to another folder` menu row listing the whole tree, which is a
+   * question the user has already answered by dragging the thing they want moved
+   * onto where they want it to go.
+   *
+   * The dragged row's id is passed because one hook instance serves the whole
+   * list and only the hook knows which row the gesture started on.
+   */
+  onDropOut?: (id: string) => void;
 }
 
 export interface UseDragSortResult {
   state: DragSortState;
   /** Props for a row. Registers the element used to hit-test and to move. */
   getRowProps: (id: string, index: number) => DragRowProps;
+  /**
+   * Props for the drop-out zone, or `null` when the list has no way out.
+   *
+   * Returns `null` rather than an inert object so a caller that renders the zone
+   * conditionally cannot leave an invisible hit target on screen.
+   */
+  getOutZoneProps: () => DragOutZoneProps | null;
   /** True while a drag is in flight, so the list can soften the surrounding UI. */
   dragging: boolean;
   /**
@@ -108,14 +136,23 @@ const LONG_PRESS_MS = 280;
 /** Movement before the lift that means the finger is scrolling, not dragging. */
 const SLOP_PX = 8;
 
-export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragSortOptions): UseDragSortResult {
+export function useDragSort({
+  ids,
+  onReorder,
+  noun = 'item',
+  labelOf,
+  onDropOut,
+}: UseDragSortOptions): UseDragSortResult {
   const [state, setState] = React.useState<DragSortState & { dy: number }>({
     draggingId: null,
     overIndex: null,
+    overOut: false,
     dy: 0,
   });
 
   const rows = React.useRef(new Map<string, HTMLElement>());
+  /** The caller's "move out" target, when it rendered one. */
+  const outZone = React.useRef<HTMLElement | null>(null);
   const orderRef = React.useRef<readonly string[]>(ids);
   /** The row a press is *pending* on. Cleared by movement, release or a lift. */
   const armed = React.useRef<string | null>(null);
@@ -199,7 +236,7 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
     (id: string, overIndex: number) => {
       const order = orderRef.current;
       const from = order.indexOf(id);
-      setState({ draggingId: null, overIndex: null, dy: 0 });
+      setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
       if (from < 0 || from === overIndex || !onReorder) return;
       const next = order.slice();
       next.splice(from, 1);
@@ -214,6 +251,7 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
       const isDragged = state.draggingId === id;
       const isTarget = state.draggingId !== null && !isDragged && state.overIndex === index;
       const fromIndex = state.draggingId ? ids.indexOf(state.draggingId) : -1;
+      const label = labelOf(id).trim();
 
       return {
         ref: (element: HTMLElement | null) => registerRow(id, element),
@@ -222,10 +260,16 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
           if (!onReorder) return;
           // Primary button only: a right-click is not a drag.
           if (event.button !== 0) return;
+          const target = event.target as HTMLElement;
           // The row's own controls are taps, never drags. They opt out with
           // `data-no-drag` rather than being guessed at by tag name, because the
           // row itself is a button too.
-          if ((event.target as HTMLElement).closest('[data-no-drag]')) return;
+          if (target.closest('[data-no-drag]')) return;
+          // The grip is the one place a press means "drag" and nothing else, so it
+          // lifts at once instead of hiding behind a long press. That is what makes
+          // the row *look* draggable: the handle is the affordance, and it does what
+          // it looks like it does.
+          const grip = target.closest('[data-drag-handle]') !== null;
 
           startY.current = event.clientY;
           startX.current = event.clientX;
@@ -251,8 +295,8 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
             };
             blockScroll.current = block;
             document.addEventListener('touchmove', block, { passive: false });
-            setState({ draggingId: id, overIndex: index, dy: 0 });
-          }, LONG_PRESS_MS);
+            setState({ draggingId: id, overIndex: index, overOut: false, dy: 0 });
+          }, grip ? 0 : LONG_PRESS_MS);
         },
 
         onPointerMove: (event) => {
@@ -271,13 +315,37 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
           if (event.cancelable) event.preventDefault();
 
           const dy = event.clientY - startY.current;
+          /*
+           * Over the "move out" zone the row is not being reordered at all, so the
+           * insertion line is cleared rather than left pointing at a slot the drop
+           * will not use.
+           */
+          const zone = outZone.current;
+          let overOut = false;
+          if (zone) {
+            const box = zone.getBoundingClientRect();
+            overOut =
+              event.clientX >= box.left &&
+              event.clientX <= box.right &&
+              event.clientY >= box.top &&
+              event.clientY <= box.bottom;
+          }
+          if (overOut) {
+            setState((current) =>
+              current.draggingId === id ? { ...current, dy, overIndex: null, overOut: true } : current,
+            );
+            return;
+          }
+
           // The lifted row already carries the transform, so its measured centre
           // *is* the live centre — nothing has to be added back in, and the
           // measurement stays right however far the pointer travels.
           const rect = rows.current.get(id)?.getBoundingClientRect();
           const centre = rect ? rect.top + rect.height / 2 : event.clientY;
           setState((current) =>
-            current.draggingId === id ? { ...current, dy, overIndex: slotFor(id, centre) } : current,
+            current.draggingId === id
+              ? { ...current, dy, overIndex: slotFor(id, centre), overOut: false }
+              : current,
           );
         },
 
@@ -292,6 +360,14 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
           } catch {
             /* the capture is already gone; nothing to release */
           }
+          // A drop on the way out ends the drag as a *move*, not a reorder: the
+          // item leaves this list, so there is no new order to write.
+          if (state.overOut && onDropOut) {
+            setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
+            swallow.current = false;
+            onDropOut(id);
+            return;
+          }
           finish(id, state.overIndex ?? index);
         },
 
@@ -303,7 +379,7 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
           // interrupted). Nothing moves: the list is left exactly as it was.
           active.current = null;
           releaseScrollBlock();
-          setState({ draggingId: null, overIndex: null, dy: 0 });
+          setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
         },
 
         onKeyDown: (event) => {
@@ -320,7 +396,16 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
           onReorder(next);
         },
 
-        'aria-roledescription': `Reorderable ${noun}, ${labelOf(id)}`,
+        /*
+         * The sentence, with one guard the callers need rather than a bug they
+         * have to avoid: a *locked* link has no name to say — its content is
+         * stripped to nothing by design — and "Reorderable link, " would leave a
+         * reader at a dangling comma. So the label is optional, and the row
+         * still describes what it is and what the arrows do.
+         */
+        'aria-roledescription': label
+          ? `Reorderable ${noun}, ${label}`
+          : `Reorderable ${noun}`,
         'data-dragging': isDragged,
         'data-drop-edge': (isTarget ? (fromIndex > index ? 'top' : 'bottom') : 'none') as
           | 'top'
@@ -338,6 +423,7 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
       ids,
       labelOf,
       noun,
+      onDropOut,
       onReorder,
       registerRow,
       releaseScrollBlock,
@@ -345,12 +431,25 @@ export function useDragSort({ ids, onReorder, noun = 'item', labelOf }: UseDragS
       state.draggingId,
       state.dy,
       state.overIndex,
+      state.overOut,
     ],
   );
 
+  const getOutZoneProps = React.useCallback((): DragOutZoneProps | null => {
+    if (!onDropOut) return null;
+    return {
+      ref: (element: HTMLElement | null) => {
+        outZone.current = element;
+      },
+      'data-drop-out': true,
+      'data-drop-out-active': state.draggingId !== null && state.overOut,
+    };
+  }, [onDropOut, state.draggingId, state.overOut]);
+
   return {
-    state: { draggingId: state.draggingId, overIndex: state.overIndex },
+    state: { draggingId: state.draggingId, overIndex: state.overIndex, overOut: state.overOut },
     getRowProps,
+    getOutZoneProps,
     dragging: state.draggingId !== null,
     consumeDrag,
   };

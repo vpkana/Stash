@@ -8,6 +8,7 @@ import { pluralize } from '@/lib/format';
 import { useFolderAccess } from '@/lib/privacy/access';
 import { useVaultStore } from '@/stores/vault-store';
 import { cn } from '@/lib/utils';
+import { DragGrip } from '@/components/ui/drag-grip';
 import { Icon, isIconName } from '@/components/ui/icon';
 import { LockedRow } from '@/components/privacy/locked-row';
 import { IdentityTile } from '@/components/ui/identity-tile';
@@ -121,6 +122,8 @@ export function FolderRow({
         label={folder.name}
         subtitle={meta.length > 0 ? meta.join(' · ') : undefined}
         onReveal={() => void open()}
+        dragRow={dragRow}
+        consumeDrag={consumeDrag}
         className={className}
       />
     );
@@ -131,6 +134,8 @@ export function FolderRow({
       {...dragRow}
       className={cn('flex items-stretch', dragRow?.className, className)}
     >
+      {/* The handle appears only where the list can actually be reordered. */}
+      {dragRow ? <DragGrip /> : null}
       <button
         type="button"
         onClick={() => void open()}

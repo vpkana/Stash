@@ -9,6 +9,7 @@ import {
   ArrowElbowDownRight as PhArrowElbowDownRight,
   ArrowLeft as PhArrowLeft,
   ArrowSquareOut as PhArrowSquareOut,
+  ArrowUp as PhArrowUp,
   ArrowsClockwise as PhArrowsClockwise,
   ArrowsDownUp as PhArrowsDownUp,
   Atom as PhAtom,
@@ -175,6 +176,7 @@ export const ChevronRight = icon(PhCaretRight, 'ChevronRight');
 export const ChevronLeft = icon(PhCaretLeft, 'ChevronLeft');
 export const ChevronDown = icon(PhCaretDown, 'ChevronDown');
 export const ArrowLeft = icon(PhArrowLeft, 'ArrowLeft');
+export const ArrowUp = icon(PhArrowUp, 'ArrowUp');
 export const ArrowUpDown = icon(PhArrowsDownUp, 'ArrowUpDown');
 export const X = icon(PhX, 'X');
 export const Plus = icon(PhPlus, 'Plus');

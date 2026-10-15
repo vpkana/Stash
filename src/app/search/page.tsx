@@ -247,7 +247,7 @@ function SearchView() {
                 link={hit.link}
                 context={folderNameById.get(hit.link.folderId ?? '')}
                 highlight={!showRecent}
-                onOpen={() => openLink(hit.link)}
+                onOpen={openLink}
                 onToggleFavorite={() => void toggleLinkFavorite(hit.link.id)}
                 onShowActions={() => setActiveLink(hit.link)}
               />

@@ -33,23 +33,21 @@ export default function HomePage() {
 
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
 
-  const activeLinks = React.useMemo(
-    () => links.filter((link) => !hidden.links.has(link.id)),
-    [links, hidden],
-  );
-
   /**
    * What just landed, newest first.
    *
-   * Built from the already-filtered link list, so a protected link cannot appear
-   * here even though this is a listing with no query: the vault store removed it
-   * before this screen ever saw it.
+   * Locked links are *in* this list and render as locked rows. They used to be
+   * filtered out here on the argument that this section has no query to answer —
+   * but recency is not content: the timestamp survives locking, and a saved link
+   * missing from "what you saved lately" is the same "it vanished" problem in a
+   * quieter form. The row gives up its address and title (the store redacted
+   * them) and keeps everything else.
    */
   const recent = React.useMemo(
-    () => [...activeLinks].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5),
-    [activeLinks],
+    () => [...links].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5),
+    [links],
   );
-  const isEmpty = activeLinks.length === 0 && folders.length === 0;
+  const isEmpty = links.length === 0 && folders.length === 0;
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -65,9 +63,7 @@ export default function HomePage() {
         <PageTitle
           subtitle={
             isEmpty
-              ? 'Nothing saved yet'
-              : `${pluralize(activeLinks.length, 'link')} saved · ${pluralize(folders.length, 'folder')}`
-          }
+              ? 'Nothing saved yet'              : `${pluralize(links.length, 'link')} saved · ${pluralize(folders.length, 'folder')}`}
         >
           Your vault
         </PageTitle>
@@ -97,7 +93,15 @@ export default function HomePage() {
               <span className="text-meta mt-0.5 block truncate text-muted">
                 {inbox
                   .slice(0, 2)
-                  .map((link) => link.title?.trim() || link.source || link.url)
+                  // A locked link has no title to show, so it says what it is
+                  // instead of leaving a gap in a sentence of names.
+                  .map(
+                    (link) =>
+                      link.title?.trim() ||
+                      link.source ||
+                      link.url ||
+                      (hidden.links.has(link.id) ? 'Locked link' : 'Untitled link'),
+                  )
                   .join(' · ')}
                 {inbox.length > 2 ? ` +${inbox.length - 2} more` : ''}
               </span>
@@ -155,7 +159,7 @@ export default function HomePage() {
                     key={link.id}
                     link={link}
                     context={folderNameFor(folders, link.folderId)}
-                    onOpen={() => openLink(link)}
+                    onOpen={openLink}
                     onToggleFavorite={() => void toggleLinkFavorite(link.id)}
                     onShowActions={() => setActiveLink(link)}
                   />

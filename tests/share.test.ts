@@ -30,7 +30,6 @@ describe('parseShareToDraft', () => {
     expect(draft?.url).toBe('https://example.com/article');
     expect(draft?.domain).toBe('example.com');
     expect(draft?.title).toBeUndefined();
-    expect(draft?.note).toBeUndefined();
   });
 
   it('case 2: a title plus a URL', () => {
@@ -39,16 +38,17 @@ describe('parseShareToDraft', () => {
     });
     expect(draft?.title).toBe('Binary Search Explained');
     expect(draft?.sourceLabel).toBe('YouTube');
-    expect(draft?.note).toBeUndefined();
   });
 
-  it('case 3: arbitrary prose containing a URL', () => {
+  it('case 3: arbitrary prose containing a URL keeps the link and claims no title', () => {
     const { draft } = parseShareToDraft({
       text: 'Highly recommend this write-up about indexing https://example.com/indexes because it changed how I model queries.',
     });
-    // Long prose is kept verbatim as a note rather than forced into a heading.
+    // A link has one name, and long prose is not one: the address is still saved
+    // and the user names it afterwards if they want to. Forcing a paragraph into
+    // the heading is what the removed note was papering over.
     expect(draft?.url).toBe('https://example.com/indexes');
-    expect(draft?.note).toContain('changed how I model queries');
+    expect(draft?.title).toBeUndefined();
   });
 
   it('case 4: several URLs in one share', () => {

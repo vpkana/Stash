@@ -69,7 +69,7 @@ export default function SettingsPage() {
   const readableLinks = links.filter((link) => !hidden.links.has(link.id));
   const readableNotes = notes.filter((note) => !hidden.notes.has(note.id));
   const readableFolders = folders.filter((folder) => !hidden.folders.has(folder.id));
-  const withNotes = readableLinks.filter((link) => link.userNote?.trim()).length;
+  const withTitles = readableLinks.filter((link) => link.title?.trim()).length;
   /*
    * The erase warning counts *everything*, protected content included.
    *
@@ -150,7 +150,7 @@ export default function SettingsPage() {
           */}
           <StatRow label="Saved links" value={pluralize(readableLinks.length, 'link')} />
           <StatRow label="Notes" value={pluralize(readableNotes.length, 'note')} />
-          <StatRow label="With your own note" value={pluralize(withNotes, 'link')} />
+          <StatRow label="Named by you" value={pluralize(withTitles, 'link')} />
           <StatRow label="Folders" value={pluralize(readableFolders.length, 'folder')} />
           <StatRow label="In the Inbox" value={pluralize(inboxCount, 'link')} />
           <StatRow label="Marked unavailable" value={pluralize(unavailableCount, 'link')} last />

@@ -8,6 +8,8 @@ import { linkPrimaryLabel, linkDomain } from '@/lib/link-label';
 import { domainColor } from '@/lib/identity-color';
 import { useLockState } from '@/lib/privacy/access';
 import { useLongPress } from '@/hooks/use-long-press';
+import type { DragRowProps } from '@/hooks/use-drag-sort';
+import { DragGrip } from '@/components/ui/drag-grip';
 import { useVaultStore, selectTagsForLink } from '@/stores/vault-store';
 import { LockedRow, useRevealLocked } from '@/components/privacy/locked-row';
 import { MonogramTile } from '@/components/ui/identity-tile';
@@ -47,11 +49,25 @@ export interface LinkRowProps {
   link: SavedLink;
   /** Shown as the secondary line when the row is not inside its folder. */
   context?: string;
-  onOpen: () => void;
+  /**
+   * Open this link.
+   *
+   * Takes the link as an argument rather than letting the caller close over the
+   * one it rendered, because a *locked* row's copy is the redacted one: its
+   * address is blank by design, and the whole point of the tap is that the
+   * freshly readable link is what opens. The row re-reads it from the vault once
+   * the boundary is open and hands that over; closing over the old object would
+   * open nothing but an empty window.
+   */
+  onOpen: (link: SavedLink) => void;
   onToggleFavorite: () => void;
   onShowActions: () => void;
   /** Highlighted because it matched the current search. */
   highlight?: boolean;
+  /** Row props from {@link useDragSort}, when this list is reorderable. */
+  dragRow?: DragRowProps;
+  /** The companion to `dragRow`: true once, for the click that ends a lift. */
+  consumeDrag?: () => boolean;
   className?: string;
 }
 
@@ -62,6 +78,8 @@ export function LinkRow({
   onToggleFavorite,
   onShowActions,
   highlight = false,
+  dragRow,
+  consumeDrag,
   className,
 }: LinkRowProps) {
   // The row subscribes to the access decision rather than taking a prop, so a new
@@ -81,8 +99,9 @@ export function LinkRow({
   const { reveal, busy } = useRevealLocked();
 
   const handleOpen = () => {
+    if (consumeDrag?.()) return;
     if (consumeLongPress()) return;
-    onOpen();
+    onOpen(link);
   };
 
   if (access.locked) {
@@ -91,7 +110,24 @@ export function LinkRow({
         kind="link"
         subtitle={formatRelative(link.createdAt)}
         busy={busy}
-        onReveal={() => void reveal('link', link.id, onOpen)}
+        onReveal={() =>
+          void reveal('link', link.id, () => {
+            /*
+             * The row's own `link` is still the redacted one — `redactLink`
+             * blanks the address — so the thing to open is re-read here, now
+             * that the vault has been refreshed past the boundary. If the address
+             * is somehow still missing (the link was deleted while the prompt was
+             * up), nothing is opened rather than an empty window.
+             */
+            const fresh = useVaultStore.getState().links.find((candidate) => candidate.id === link.id);
+            if (fresh?.url) onOpen(fresh);
+          })
+        }
+        dragRow={dragRow}
+        consumeDrag={consumeDrag}
+        // The same offset the unlocked row's handle occupies, so a row does not
+        // shift sideways the moment it is unlocked.
+        gripClassName="pl-1"
         className={className}
       />
     );
@@ -110,7 +146,11 @@ export function LinkRow({
   const tileValue = domain || label.text || link.rawText || link.url;
 
   return (
-    <div className={cn('flex items-stretch', highlight && 'bg-accent-soft/40', className)}>
+    <div
+      {...dragRow}
+      className={cn('flex items-stretch', highlight && 'bg-accent-soft/40', dragRow?.className, className)}
+    >
+      {dragRow ? <DragGrip className="pl-1" /> : null}
       <button
         type="button"
         onClick={handleOpen}
@@ -189,6 +229,7 @@ export function LinkRow({
       <div className="flex shrink-0 items-center pr-1">
         <button
           type="button"
+          data-no-drag
           onClick={onToggleFavorite}
           aria-label={link.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
           aria-pressed={link.isFavorite}
@@ -203,6 +244,7 @@ export function LinkRow({
         </button>
         <button
           type="button"
+          data-no-drag
           onClick={onShowActions}
           aria-label="Link actions"
           className="tap flex size-10 items-center justify-center rounded-full text-muted active:bg-surface-2"

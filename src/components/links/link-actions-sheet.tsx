@@ -6,7 +6,6 @@ import {
   Check,
   Copy,
   ExternalLink,
-  FilePlus2,
   FolderInput,
   Link2Off,
   Lock,
@@ -29,7 +28,7 @@ import { useVaultStore } from '@/stores/vault-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { ActionList, ActionRow } from '@/components/ui/action-list';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/input';
+import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
@@ -48,9 +47,20 @@ type Mode = 'actions' | 'move' | 'confirm-delete' | 'attach-note' | 'tags';
 export interface LinkActionsSheetProps {
   link: SavedLink | null;
   onClose: () => void;
+  /**
+   * Offer the folder picker.
+   *
+   * Off by default, because inside a folder a link is moved by dragging it —
+   * including out of the folder, onto the drop target above the list — and a menu
+   * row listing the whole tree is a slower way to do a thing the gesture already
+   * does. The Inbox is the one caller that turns it on: an unfiled link has no
+   * parent to drag out to, and "file this one" is the entire purpose of that
+   * screen.
+   */
+  allowMove?: boolean;
 }
 
-export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
+export function LinkActionsSheet({ link, onClose, allowMove = false }: LinkActionsSheetProps) {
   const router = useRouter();
   const folders = useVaultStore((state) => state.folders);
   const notes = useVaultStore((state) => state.notes);
@@ -69,7 +79,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
   // State is initialised from props and reset by remounting: callers pass a
   // `key` derived from the link id, so a different link always starts clean.
   const [mode, setMode] = React.useState<Mode>('actions');
-  const [note, setNote] = React.useState(link?.userNote ?? '');
+  const [title, setTitle] = React.useState(link?.title ?? '');
   const [busy, setBusy] = React.useState(false);
   const ensureLocking = usePrivacyStore((state) => state.ensureLocking);
   const protectedId = link?.id ?? '';
@@ -85,7 +95,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
 
   if (!link) return null;
 
-  const noteDirty = note.trim() !== (link.userNote ?? '').trim();
+  const titleDirty = title.trim() !== (link.title ?? '').trim();
 
   const openLink = () => {
     void useVaultStore.getState().markLinkOpened(link.id);
@@ -120,11 +130,16 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
     else if (outcome === 'failed') toast('Could not share that', { tone: 'danger' });
   };
 
-  const saveNote = async () => {
+  //
+  // The one editable field on a link. Saving is explicit rather than autosaved
+  // because the sheet also holds a destination picker and a tag editor, and a
+  // half-typed title being written on every keystroke would fight the refresh
+  // that follows each of those.
+  const saveTitle = async () => {
     setBusy(true);
-    await useVaultStore.getState().updateLink(link.id, { userNote: note });
+    await useVaultStore.getState().updateLink(link.id, { title });
     setBusy(false);
-    toast('Note saved', { tone: 'success' });
+    toast('Title saved', { tone: 'success' });
   };
 
   const move = async (folderId: string | null) => {
@@ -146,19 +161,6 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
     }
     toast('Attached to note', { tone: 'success' });
     close();
-  };
-
-  const createNote = async () => {
-    setBusy(true);
-    const result = await useVaultStore.getState().createNoteFromLink(link.id);
-    setBusy(false);
-    if (!result.ok) {
-      toast(result.message, { tone: 'danger' });
-      return;
-    }
-    toast('Note created', { tone: 'success' });
-    close();
-    router.push(`/notes?note=${result.note.id}`);
   };
 
   /**
@@ -245,8 +247,8 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
               <div className="rounded-xl border border-danger/30 bg-danger-soft p-3.5">
                 <p className="text-row font-semibold text-danger">This removes the link permanently</p>
                 <p className="mt-1.5 text-meta leading-relaxed text-fg/80">
-                  “{link.title?.trim() || displayUrl(link.url, 40)}” moves to the trash. Its note and the notes
-                  that reference it are left alone, and you can restore it from Settings → Trash.
+                  “{link.title?.trim() || displayUrl(link.url, 40)}” moves to the trash. The notes that reference
+                  it are left alone, and you can restore it from Settings → Trash.
                 </p>
                 <div className="mt-3.5 flex gap-2">
                   <Button variant="surface" className="flex-1" onClick={() => setMode('actions')} disabled={busy}>
@@ -275,23 +277,34 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
                 </p>
               </div>
 
+              {/*
+                The title, editable here and nowhere else. It used to be possible
+                only at the moment of saving: a link's heading was whatever the
+                sharing app happened to send, and a typo or a bare domain was
+                permanent. One field, editable in place, is the whole fix.
+              */}
               <div className="flex flex-col gap-2 px-4 py-3">
-                <label htmlFor="link-note" className="text-label text-subtle">
-                  Your note
+                <label htmlFor="link-title" className="text-label text-subtle">
+                  Title
                 </label>
-                <Textarea
-                  id="link-note"
-                  value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  rows={3}
-                  maxLength={2000}
-                  placeholder="Why did you keep this?"
+                <Input
+                  id="link-title"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  maxLength={200}
+                  placeholder="Name this link"
                   className="bg-surface text-row"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && titleDirty) {
+                      event.preventDefault();
+                      void saveTitle();
+                    }
+                  }}
                 />
-                {noteDirty ? (
-                  <Button variant="accentSoft" size="sm" onClick={() => void saveNote()} disabled={busy}>
+                {titleDirty ? (
+                  <Button variant="accentSoft" size="sm" onClick={() => void saveTitle()} disabled={busy}>
                     <Check size={16} strokeWidth={2.4} aria-hidden />
-                    Save note
+                    Save title
                   </Button>
                 ) : null}
               </div>
@@ -356,20 +369,17 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
                 }}
               />
               <ActionRow
-                icon={<FilePlus2 size={18} strokeWidth={1.9} aria-hidden />}
-                label="Create note from link"
-                onClick={() => void createNote()}
-              />
-              <ActionRow
                 icon={<NotebookPen size={18} strokeWidth={1.9} aria-hidden />}
                 label={referencingNotes.length > 0 ? 'Attach to another note' : 'Attach to a note'}
                 onClick={() => setMode('attach-note')}
               />
-              <ActionRow
-                icon={<FolderInput size={18} strokeWidth={1.9} aria-hidden />}
-                label="Move to another folder"
-                onClick={() => setMode('move')}
-              />
+              {allowMove ? (
+                <ActionRow
+                  icon={<FolderInput size={18} strokeWidth={1.9} aria-hidden />}
+                  label="Move to another folder"
+                  onClick={() => setMode('move')}
+                />
+              ) : null}
               <ActionRow
                 icon={
                   link.isLocked ? (
@@ -441,14 +451,7 @@ export function LinkActionsSheet({ link, onClose }: LinkActionsSheetProps) {
             </Button>
           </SheetFooter>
         ) : null}
-        {mode === 'attach-note' ? (
-          <SheetFooter>
-            <Button variant="accentSoft" className="w-full" onClick={() => void createNote()} disabled={busy}>
-              <FilePlus2 size={17} strokeWidth={2} aria-hidden />
-              New note from this link
-            </Button>
-          </SheetFooter>
-        ) : mode === 'tags' ? (
+        {mode === 'tags' ? (
           <SheetFooter>
             <Button variant="surface" className="w-full" onClick={close}>
               Done

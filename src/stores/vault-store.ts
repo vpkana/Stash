@@ -39,6 +39,7 @@ import {
   moveLink as moveLinkRepo,
   setLinkFavorite,
   setLinkLocked,
+  setLinkOrder as setLinkOrderRepo,
   setLinkUnavailable as setLinkUnavailableRepo,
   touchLinkOpened,
   updateLink as updateLinkRepo,
@@ -75,7 +76,7 @@ import {
   type NoteDeleteStrategy,
 } from '@/db/repos/notes';
 import { visibleNotes } from '@/lib/notes';
-import { noteBreadcrumb, noteChildren, noteDescendantIds } from '@/lib/tree';
+import { noteBreadcrumb, noteChildren, noteDescendantIds, orderedLinks } from '@/lib/tree';
 import { computeFolderStats, type FolderStats } from '@/lib/folder-stats';
 import { isSessionLocked } from '@/lib/privacy/keyring';
 import {
@@ -217,6 +218,14 @@ export interface VaultState {
   saveLink: (input: CreateLinkInput) => Promise<SavedLink>;
   updateLink: (id: string, patch: UpdateLinkInput) => Promise<void>;
   moveLink: (id: string, folderId: string | null) => Promise<void>;
+  /**
+   * Persist a new order for the links in one folder, as produced by a drag.
+   *
+   * Takes the whole list rather than a from/to pair, for the same reason
+   * `setFolderOrder` does: the order the user left on screen *is* the order, and a
+   * two-position move has to be re-derived from a list that may have changed.
+   */
+  setLinkOrder: (folderId: string | null, orderedIds: readonly string[]) => Promise<boolean>;
   toggleLinkFavorite: (id: string, value?: boolean) => Promise<void>;
   toggleLinkLocked: (id: string, value?: boolean) => Promise<void>;
   /** Moves a link to the trash: recoverable, and what every "Delete" button does. */
@@ -257,14 +266,14 @@ export interface VaultState {
 /**
  * Move live, unarchived links with no folder into the Inbox list.
  *
- * Sorted newest first: the Inbox is a queue of recent arrivals, so the thing you
- * just saved from another app is at the top, which is the whole point of saving
- * without filing.
+ * Newest first — so the thing you just saved from another app is at the top, which
+ * is the whole point of saving without filing — *unless* the user has arranged
+ * them by hand, in which case their arrangement wins (see `orderedLinks`). The
+ * Inbox is a list like any other, so it reorders the same way the Library does,
+ * under the same rule.
  */
 function inboxOf(links: readonly SavedLink[]): SavedLink[] {
-  return links
-    .filter((link) => link.folderId === null)
-    .sort((a, b) => b.createdAt - a.createdAt);
+  return orderedLinks(links.filter((link) => link.folderId === null));
 }
 
 /**
@@ -388,7 +397,29 @@ async function loadEverything() {
     sessionLocked,
     hidden,
     hasProtection,
-    inboxLinks: inboxOf(links.filter((link) => !hidden.links.has(link.id))),
+    /*
+     * The Inbox lists locked links too.
+     *
+     * A locked link keeps its row (its content is already stripped to nothing),
+     * so locking one never makes it disappear from the only screen that shows
+     * unfiled links. Excluding it was how "I locked this and it vanished"
+     * happened: there was no list left that mentioned it anywhere the user would
+     * look. The row is the way back to it, not a leak — it carries no address and
+     * no title, only the fact that something is there.
+     */
+    inboxLinks: inboxOf(links),
+    /*
+     * Derived views leave withheld items out; *structural* lists show their rows.
+     *
+     * The difference is what each kind of list is for. The tree, the Inbox and
+     * recents say where something lives, so a locked item keeps its row (see the
+     * Inbox above) — hiding it there is how "it vanished" happens. A derived view
+     * summarises content the session may read instead: a favourite a lock is
+     * standing over, a tag on a sealed link, a count of sealed rows — each is a
+     * statement *about* the content, and each one shows a little of it. So the
+     * summary withholds and the row does not. Pinned by the "listings do not
+     * leak" suite.
+     */
     favoriteFolders: folders.filter((folder) => folder.isFavorite && !hidden.folders.has(folder.id)),
     favoriteNotes: [...openNotes]
       .filter((note) => note.isFavorite && !hidden.notes.has(note.id))
@@ -533,6 +564,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     await moveLinkRepo(id, folderId);
     if (folderId) await pushRecentFolder(folderId);
     await get().refresh();
+  },
+
+  setLinkOrder: async (folderId, orderedIds) => {
+    const ok = await setLinkOrderRepo(folderId, orderedIds);
+    if (ok) await get().refresh();
+    return ok;
   },
 
   toggleLinkFavorite: async (id, value) => {

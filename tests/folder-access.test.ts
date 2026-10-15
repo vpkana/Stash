@@ -240,8 +240,8 @@ describe('D and E: sharing', () => {
     // The sheet opened, nothing was queued, and no prompt is on screen.
     expect(useCaptureStore.getState().status).toBe('open');
     expect(usePrivacyStore.getState().revealRequest).toBeNull();
-    // The source's title is offered as the note, editable, and separate from the URL.
-    expect(useCaptureStore.getState().draft?.note).toBe('React Server Components');
+    // The source's title is offered in the one editable field, separate from the URL.
+    expect(useCaptureStore.getState().draft?.title).toBe('React Server Components');
     expect(useCaptureStore.getState().draft?.url).toBe('https://youtube.com/watch?v=abc123');
 
     expect(await useCaptureStore.getState().chooseDestination({ kind: 'folder', folderId: workId })).toBe(true);
@@ -252,7 +252,7 @@ describe('D and E: sharing', () => {
     const saved = useVaultStore.getState().links.find((link) => link.id === outcome.link?.id);
     expect(saved?.folderId).toBe(workId);
     expect(saved?.url).toBe('https://youtube.com/watch?v=abc123');
-    expect(saved?.userNote).toBe('React Server Components');
+    expect(saved?.title).toBe('React Server Components');
   });
 
   it('never pre-selects a locked folder as the destination', async () => {

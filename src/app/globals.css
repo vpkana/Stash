@@ -606,6 +606,30 @@
 }
 
 /*
+ * The "move out of this directory" target.
+ *
+ * Quiet at rest — a hairline and a muted glyph, present but not asking for
+ * anything — and unmistakable the moment a row is over it, which is the only
+ * moment it matters. Colour is the accent because this *is* the action; the
+ * border steps up with it so the change reads on a low-contrast display too.
+ */
+.drop-out-zone {
+  border-color: var(--hairline);
+  background-color: var(--surface-2);
+  color: var(--muted-fg);
+  transition:
+    border-color 140ms ease-out,
+    background-color 140ms ease-out,
+    color 140ms ease-out;
+}
+
+.drop-out-zone[data-drop-out-active='true'] {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/*
  * The editable note body.
  *
  * A contentEditable is not a `<textarea>`: the browser gives it margins on

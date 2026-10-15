@@ -14,6 +14,7 @@ import { allLockRoots } from '@/lib/privacy/protection';
 import { devicePromptName } from '@/lib/privacy/auth';
 import {
   LEGACY_PASSCODE_EXPLANATION,
+  LEGACY_PASSCODE_FIELD_LABEL,
   LEGACY_PASSCODE_HEADLINE,
 } from '@/lib/privacy/legacy-passcode';
 import { screenPrivacySupported } from '@/lib/privacy/screen';
@@ -223,7 +224,7 @@ export function PrivacySettings() {
                 <p className="mt-0.5 text-meta leading-relaxed text-subtle">{LEGACY_PASSCODE_EXPLANATION}</p>
               </div>
               <PasscodeInput
-                label="The passcode you used before"
+                label={LEGACY_PASSCODE_FIELD_LABEL}
                 value={passcode}
                 onChange={(value) => {
                   setPasscode(value);
