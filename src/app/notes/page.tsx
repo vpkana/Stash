@@ -7,6 +7,7 @@ import type { Note, SavedLink } from '@/db/types';
 import { displayUrl, pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { noteChildren, noteDescendantIds } from '@/lib/tree';
+import { noteTitleText } from '@/lib/notes';
 import { useLockState } from '@/lib/privacy/access';
 import { useRevealLocked } from '@/components/privacy/locked-row';
 import { useVaultStore } from '@/stores/vault-store';
@@ -17,6 +18,8 @@ import { NoteEditor } from '@/components/notes/note-editor';
 import { SubnoteSheet } from '@/components/notes/subnote-sheet';
 import type { RichTextApi } from '@/components/notes/rich-text-editor';
 import { NoteRow } from '@/components/notes/note-row';
+import { DropOutZone } from '@/components/ui/drop-out-zone';
+import { useDragSort } from '@/hooks/use-drag-sort';
 import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
 import { NoteResources } from '@/components/notes/note-resources';
 import { LinkPickerSheet } from '@/components/links/link-picker-sheet';
@@ -143,7 +146,7 @@ function NotesView() {
     for (const subnote of subnotes) blocked.add(subnote.id);
     return visibleNotes
       .filter((note) => !blocked.has(note.id))
-      .sort((a, b) => a.title.localeCompare(b.title));
+      .sort((a, b) => noteTitleText(a.title).localeCompare(noteTitleText(b.title)));
   }, [current, notes, subnotes, visibleNotes]);
 
   // `current` is present but unreadable: see the editor branch below. Asked of
@@ -158,6 +161,94 @@ function NotesView() {
     () => visibleNotes.filter((note) => note.isFavorite).slice(0, 4),
     [visibleNotes],
   );
+
+  /** The title a row says when the list describes what it is moving. */
+  const labelOfNote = React.useCallback(
+    (id: string) => {
+      const note = notes.find((candidate) => candidate.id === id);
+      return note ? noteTitleText(note.title) : 'note';
+    },
+    [notes],
+  );
+
+  /**
+   * Drop a note *onto* another one, which nests it there.
+   *
+   * The same gesture the Library uses to put a link in a folder: the destination
+   * is the row under the finger, not a slot between two rows. `moveNote` does the
+   * refusing — a note cannot be dropped into its own subtree — and its reason is
+   * what the toast says, so a drag that cannot land explains itself.
+   */
+  const dropNoteOnNote = React.useCallback(async (id: string, targetId: string) => {
+    const target = notes.find((note) => note.id === targetId);
+    const result = await useVaultStore.getState().moveNote(id, targetId);
+    if (!result.ok) {
+      toast(result.reason, { tone: 'danger' });
+      return;
+    }
+    toast(target ? `Moved into “${noteTitleText(target.title)}”` : 'Note nested', { tone: 'success' });
+  }, [notes]);
+
+  /*
+   * Notes reorder the way folders and links do: the same hook, the same handle,
+   * the same persisted order. Two lists can be on screen over a visit — the
+   * top-level index, and the subnotes of whatever note is open — so there are two
+   * instances, each scoped to its own siblings.
+   *
+   * Both also accept a drop *onto* a row: that is how a note becomes a subnote
+   * without opening a menu, which is the move gesture the Library already has for
+   * links and folders.
+   */
+  const rootDrag = useDragSort({
+    ids: rootNotes.map((note) => note.id),
+    noun: 'note',
+    labelOf: labelOfNote,
+    onReorder: (next) => {
+      void useVaultStore
+        .getState()
+        .setNoteOrder(null, next)
+        .then((ok) => {
+          if (!ok) toast('Could not save that order', { tone: 'danger' });
+        });
+    },
+    onDropOn: (id, targetId) => void dropNoteOnNote(id, targetId),
+  });
+
+  const subnoteDrag = useDragSort({
+    ids: subnotes.map((note) => note.id),
+    noun: 'subnote',
+    labelOf: labelOfNote,
+    onReorder: (next) => {
+      void useVaultStore
+        .getState()
+        .setNoteOrder(current?.parentNoteId ?? null, next)
+        .then((ok) => {
+          if (!ok) toast('Could not save that order', { tone: 'danger' });
+        });
+    },
+    // Only when a note is open: a subnote dragged upward becomes a sibling of the
+    // note it was under, which is the one level a drag can express.
+    ...(current
+      ? {
+          onDropOut: (id: string) => {
+            void useVaultStore
+              .getState()
+              .moveNote(id, current.parentNoteId)
+              .then((result) => {
+                if (!result.ok) {
+                  toast(result.reason, { tone: 'danger' });
+                  return;
+                }
+                toast('Moved out one level', { tone: 'success' });
+              });
+          },
+          onDropOn: (id: string, targetId: string) => void dropNoteOnNote(id, targetId),
+        }
+      : {}),
+  });
+
+  /** The one drop target a subnote list needs, or `null` when there is no list. */
+  const subnoteOutZone = subnoteDrag.getOutZoneProps();
 
   const openNote = React.useCallback(
     (id: string) => {
@@ -202,7 +293,7 @@ function NotesView() {
         return;
       }
       setAddingSubnote(false);
-      editorApi.current?.insertNoteReference(result.note.id, result.note.title);
+      editorApi.current?.insertNoteReference(result.note.id, noteTitleText(result.note.title));
       toast('Subnote added here');
     },
     [],
@@ -224,7 +315,7 @@ function NotesView() {
         return;
       }
       setAddingSubnote(false);
-      editorApi.current?.insertNoteReference(note.id, note.title);
+      editorApi.current?.insertNoteReference(note.id, noteTitleText(note.title));
       toast('Note nested here');
     },
     [],
@@ -261,6 +352,11 @@ function NotesView() {
 
     const parentId = current.parentNoteId;
     const descendantCount = noteDescendantIds(notes, current.id).length;
+    const outLabel = `Move out to ${
+      parentId
+        ? noteTitleText(notes.find((note) => note.id === parentId)?.title ?? 'the parent note')
+        : 'the top level'
+    }`;
 
     return (
       <>
@@ -291,13 +387,13 @@ function NotesView() {
                     onClick={() => openNote(note.id)}
                     className="tap max-w-[8rem] shrink-0 truncate rounded px-1 py-0.5 active:bg-surface-2"
                   >
-                    {note.title}
+                    {noteTitleText(note.title)}
                   </button>
                 </React.Fragment>
               ))}
               <ChevronRight size={12} strokeWidth={2.2} className="shrink-0 text-subtle" aria-hidden />
               <span className="max-w-[9rem] shrink-0 truncate px-1 py-0.5 font-medium text-muted">
-                {current.title}
+                {noteTitleText(current.title)}
               </span>
             </nav>
 
@@ -380,8 +476,20 @@ function NotesView() {
           */}
         {subnotes.length > 0 ? (
           <Section title="Subnotes" className="pt-2">
+            {/*
+              One level out, as a drop target that only exists while a subnote is
+              actually being moved — a bar that is on screen at rest is a control
+              nobody asked to press.
+            */}
+            {subnoteOutZone ? (
+              <DropOutZone
+                zoneProps={subnoteOutZone}
+                label={outLabel}
+                visible={subnoteDrag.dragging}
+              />
+            ) : null}
             <ListSurface>
-              {subnotes.map((subnote) => (
+              {subnotes.map((subnote, index) => (
                 <NoteRow
                   key={subnote.id}
                   note={subnote}
@@ -390,9 +498,16 @@ function NotesView() {
                   onOpen={() => openNote(subnote.id)}
                   onShowActions={() => setActiveNote(subnote)}
                   onToggleFavorite={() => void useVaultStore.getState().toggleNoteFavorite(subnote.id)}
+                  dragRow={subnoteDrag.getRowProps(subnote.id, index)}
+                  consumeDrag={subnoteDrag.consumeDrag}
                 />
               ))}
             </ListSurface>
+            {subnotes.length > 1 ? (
+              <p className="text-meta px-5 pt-2 text-subtle">
+                Drag a row by its handle to reorder it, or onto another note to nest it there.
+              </p>
+            ) : null}
           </Section>
         ) : null}
 
@@ -422,7 +537,7 @@ function NotesView() {
         <SubnoteSheet
           open={addingSubnote}
           onClose={() => setAddingSubnote(false)}
-          parentTitle={current.title}
+          parentTitle={noteTitleText(current.title)}
           candidates={nestCandidates}
           onCreate={(title) => void createSubnoteAtCaret(current.id, title)}
           onNest={(note) => void nestSubnoteAtCaret(current.id, note)}
@@ -540,7 +655,7 @@ function NotesView() {
           <Section title="Top-level notes" className="pb-6">
             {rootNotes.length > 0 ? (
               <ListSurface>
-                {rootNotes.map((note) => (
+                {rootNotes.map((note, index) => (
                   <NoteRow
                     key={note.id}
                     note={note}
@@ -549,6 +664,8 @@ function NotesView() {
                     onOpen={() => openNote(note.id)}
                     onShowActions={() => setActiveNote(note)}
                     onToggleFavorite={() => void useVaultStore.getState().toggleNoteFavorite(note.id)}
+                    dragRow={rootDrag.getRowProps(note.id, index)}
+                    consumeDrag={rootDrag.consumeDrag}
                   />
                 ))}
               </ListSurface>

@@ -67,6 +67,7 @@ import {
   getNoteDeletionImpact,
   renameNote as renameNoteRepo,
   reorderNote as reorderNoteRepo,
+  setNoteOrder as setNoteOrderRepo,
   setNoteFavorite,
   setNoteLocked,
   updateNote as updateNoteRepo,
@@ -246,6 +247,8 @@ export interface VaultState {
   renameNote: (id: string, title: string) => Promise<boolean>;
   moveNote: (id: string, targetParentNoteId: string | null) => Promise<MoveNoteResult>;
   reorderNote: (id: string, direction: 'up' | 'down') => Promise<boolean>;
+  /** Write an explicit sibling order, as a drag produces. */
+  setNoteOrder: (parentNoteId: string | null, orderedIds: readonly string[]) => Promise<boolean>;
   deleteNote: (id: string, strategy: NoteDeleteStrategy) => Promise<boolean>;
   toggleNoteFavorite: (id: string, value?: boolean) => Promise<void>;
   toggleNoteLocked: (id: string, value?: boolean) => Promise<void>;
@@ -426,6 +429,25 @@ async function loadEverything() {
       .sort((a, b) => b.updatedAt - a.updatedAt),
     tagUsage: tagUsageOf(tags, visibleLinkTags),
     tagsByLink: tagNamesByLink(tags, visibleLinkTags),
+  };
+}
+
+/**
+ * Replace one note in both published collections.
+ *
+ * `notes` and `visibleNotes` are separate arrays — one is everything the vault
+ * holds, the other is the list screens iterate — and patching only the first left
+ * every row showing the old title until something else happened to trigger a full
+ * refresh. That is why a renamed note seemed to change only after going back and
+ * forth a few times: the editor's own state was current, and the list was not.
+ */
+function withUpdatedNote(
+  state: Pick<VaultState, 'notes' | 'visibleNotes'>,
+  updated: Note,
+): Pick<VaultState, 'notes' | 'visibleNotes'> {
+  return {
+    notes: state.notes.map((note) => (note.id === updated.id ? updated : note)),
+    visibleNotes: state.visibleNotes.map((note) => (note.id === updated.id ? updated : note)),
   };
 }
 
@@ -662,15 +684,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   saveNoteDraft: async (id, draft) => {
     const updated = await updateNoteRepo(id, { title: draft.title, content: draft.content });
     if (!updated) return;
-    set({
-      notes: get().notes.map((note) => (note.id === id ? updated : note)),
-    });
+    set(withUpdatedNote(get(), updated));
   },
 
   renameNote: async (id, title) => {
     const updated = await renameNoteRepo(id, title);
     if (!updated) return false;
-    set({ notes: get().notes.map((note) => (note.id === id ? updated : note)) });
+    set(withUpdatedNote(get(), updated));
     return true;
   },
 
@@ -682,6 +702,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   reorderNote: async (id, direction) => {
     const ok = await reorderNoteRepo(id, direction);
+    if (ok) await get().refresh();
+    return ok;
+  },
+
+  setNoteOrder: async (parentNoteId, orderedIds) => {
+    const ok = await setNoteOrderRepo(parentNoteId, orderedIds);
     if (ok) await get().refresh();
     return ok;
   },

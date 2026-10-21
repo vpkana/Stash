@@ -176,24 +176,36 @@ export async function setFolderOrder(parentId: string | null, orderedIds: readon
 
     const seen = new Set<string>();
     const placed: Array<{ id: string; sortOrder: number }> = [];
+    /*
+     * `position` is the row's index in the order the caller sent, and it is
+     * deliberately **not** `placed.length`.
+     *
+     * Counting only the rows that needed a write made every row after an
+     * unchanged one land one slot too high. Reordering [a, b, c] (stored 0, 1, 2)
+     * to [b, c, a] wrote b→0 and c→1, skipped a because it already read 0, and
+     * left two rows claiming position 0 — so the list came back from the database
+     * in an order nobody had chosen, which is exactly what a row "snapping back"
+     * or refusing to go above its neighbour looks like.
+     */
+    let position = 0;
     for (const id of orderedIds) {
       const folder = byId.get(id);
       if (!folder || seen.has(id)) continue;
       seen.add(id);
-      const index = placed.length;
-      if (folder.sortOrder !== index) placed.push({ id, sortOrder: index });
+      if (folder.sortOrder !== position) placed.push({ id, sortOrder: position });
+      position += 1;
     }
 
     // Anything the caller did not mention keeps a place after the ones it did,
     // rather than being dragged to the top by omission.
     const trailing = siblings.filter((folder) => !seen.has(folder.id));
-    let next = placed.length;
     for (const folder of trailing) {
-      if (folder.sortOrder !== next) placed.push({ id: folder.id, sortOrder: next });
-      next += 1;
+      if (folder.sortOrder !== position) placed.push({ id: folder.id, sortOrder: position });
+      position += 1;
     }
 
-    if (placed.length === 0) return false;
+    // Nothing to write means the stored order already is the requested one.
+    if (placed.length === 0) return true;
     await Promise.all(placed.map((entry) => db.folders.update(entry.id, { sortOrder: entry.sortOrder })));
     return true;
   });

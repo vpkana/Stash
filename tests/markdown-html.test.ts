@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { escapeHtml, htmlToMarkdown, markdownToHtml, type DomNodeLike } from '@/lib/markdown-html';
+import {
+  escapeHtml,
+  htmlToInlineMarkdown,
+  htmlToMarkdown,
+  markdownToHtml,
+  type DomNodeLike,
+} from '@/lib/markdown-html';
 
 /**
  * The editor's Markdown ↔ HTML boundary.
@@ -66,9 +72,18 @@ describe('markdownToHtml', () => {
     );
   });
 
-  it('groups consecutive items into one list, bullets and numbers alike', () => {
+  it('groups consecutive items into one list, and keeps a numbered list numbered', () => {
     expect(markdownToHtml('- one\n- two')).toBe('<ul><li>one</li><li>two</li></ul>');
-    expect(markdownToHtml('1. one\n2. two')).toBe('<ul><li>one</li><li>two</li></ul>');
+    // Not a `<ul>`: a numbered list reopened in the editor used to come back as
+    // bullets, which is what made numbers "turn into dots" between sessions.
+    expect(markdownToHtml('1. one\n2. two')).toBe('<ol><li>one</li><li>two</li></ol>');
+    expect(markdownToHtml('3. three\n4. four')).toBe('<ol start="3"><li>three</li><li>four</li></ol>');
+  });
+
+  it('closes and reopens a list when its kind changes', () => {
+    expect(markdownToHtml('- bullet\n1. number')).toBe(
+      '<ul><li>bullet</li></ul><ol><li>number</li></ol>',
+    );
   });
 
   it('marks a checklist item on the item, not in its text', () => {
@@ -200,6 +215,26 @@ describe('htmlToMarkdown', () => {
     expect(htmlToMarkdown(root(el('del', {}, text('gone'))))).toBe('~~gone~~');
   });
 
+  it('keeps loose text beside a formatted run on the same line', () => {
+    // Pressing Bold a second time steps the caret *out* of the wrapper, so what
+    // the user types next is a bare text node beside a `<b>` at the top level.
+    // Serialising each child as its own paragraph put a blank line in the middle
+    // of the sentence — the "messed lines" a reopened note showed.
+    expect(htmlToMarkdown(root(el('b', {}, text('Bold')), text(' plain')))).toBe('**Bold** plain');
+    expect(htmlToMarkdown(root(text('plain '), el('i', {}, text('it'))))).toBe('plain *it*');
+    // A whole sentence with two toggles in it is still one paragraph.
+    expect(
+      htmlToMarkdown(
+        root(
+          el('b', {}, text('one')),
+          text(' two '),
+          el('i', {}, text('three')),
+          text(' four'),
+        ),
+      ),
+    ).toBe('**one** two *three* four');
+  });
+
   it('never stores the invisible character the editor uses as a caret carrier', () => {
     // Bold with no selection arms the format by inserting an empty `<b>` holding a
     // zero-width space (see `toggleTypingStyle`). It is there so the caret has
@@ -248,4 +283,66 @@ describe('the two directions agree', () => {
       expect(once).toContain(fragment);
     }
   });
+
+  it('keeps a numbered list numbered', () => {
+    expect(markdownToHtml('1. one\n2. two')).toBe('<ol><li>one</li><li>two</li></ol>');
+    expect(htmlToMarkdown(markdownToHtmlTree('1. one\n2. two'))).toBe('1. one\n2. two');
+  });
+
+  it('round-trips italic inside bold without leaving asterisks behind', () => {
+    /*
+     * The reported bug: bold a sentence, italicise a word in it, reopen the note —
+     * and asterisks appeared in text that was never typed with any. The flat
+     * inline parser could not nest, so it ended the bold at the first `*` of the
+     * italic and rendered the surplus markers as text.
+     */
+    const html = '<p><strong>a <em>b</em> c</strong></p>';
+    const tree = root(el('p', {}, el('strong', {}, text('a '), el('em', {}, text('b')), text(' c'))));
+    const markdown = htmlToMarkdown(tree);
+    expect(markdown).toBe('**a _b_ c**');
+    expect(markdownToHtml(markdown)).toBe(html);
+    expect(markdown).not.toContain('* *');
+  });
+
+  it('round-trips bold inside italic too', () => {
+    const markdown = htmlToMarkdown(
+      root(el('p', {}, el('em', {}, text('a '), el('strong', {}, text('b')), text(' c')))),
+    );
+    expect(markdown).toBe('*a __b__ c*');
+    expect(markdownToHtml(markdown)).toBe('<p><em>a <strong>b</strong> c</em></p>');
+  });
+
+  it('reads the triple marker as bold and italic at once', () => {
+    expect(markdownToHtml('***both***')).toBe('<p><strong><em>both</em></strong></p>');
+  });
+
+  it('serialises a one-line fragment as inline markdown, not as paragraphs', () => {
+    // The note title is a single line: running it through `htmlToMarkdown` would
+    // put a blank line between `**Design**` and `notes`, because a block walker
+    // separates every top-level node.
+    expect(
+      htmlToInlineMarkdown(
+        root(el('strong', {}, text('Design')), text(' notes with '), el('em', {}, text('care'))),
+      ),
+    ).toBe('**Design** notes with *care*');
+  });
 });
+
+/** `markdownToHtml` output as a tree, so the other direction can be exercised. */
+function markdownToHtmlTree(markdown: string) {
+  // The link/list cases here contain no inline markup, so a deliberately small
+  // parse is enough to hand `htmlToMarkdown` the shapes the editor produces.
+  const blocks = markdown.split('\n').filter(Boolean).map((line) => {
+    const ordered = /^(\d+)[.)]\s+(.*)$/.exec(line);
+    if (ordered) return { type: 'li', text: ordered[2] ?? '' } as const;
+    return { type: 'p', text: line } as const;
+  });
+  const listItems = blocks.filter((block) => block.type === 'li');
+  const paragraphs = blocks.filter((block) => block.type === 'p');
+  return root(
+    ...paragraphs.map((block) => el('p', {}, text(block.text))),
+    ...(listItems.length > 0
+      ? [el('ol', {}, ...listItems.map((item) => el('li', {}, text(item.text))))]
+      : []),
+  );
+}

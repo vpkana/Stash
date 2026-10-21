@@ -37,11 +37,11 @@ export interface MarkdownListItem {
 
 export type InlineNode =
   | { type: 'text'; value: string }
-  | { type: 'bold'; value: string }
-  | { type: 'italic'; value: string }
-  | { type: 'strike'; value: string }
+  | { type: 'bold'; value: string; children?: InlineNode[] }
+  | { type: 'italic'; value: string; children?: InlineNode[] }
+  | { type: 'strike'; value: string; children?: InlineNode[] }
   | { type: 'code'; value: string }
-  | { type: 'link'; value: string; href: string };
+  | { type: 'link'; value: string; href: string; children?: InlineNode[] };
 
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const DIVIDER = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
@@ -213,20 +213,14 @@ const BARE_URL = `(?<![\\w@.])(?:www\\.)?[a-z0-9][a-z0-9-]*(?:\\.[a-z0-9-]+)*\\.
 
 const SCHEMED_URL = `https?:\\/\\/[^\\s<>"'\u0060)\\]]+`;
 
-const INLINE_PATTERN = new RegExp(
-  [
-    '(`[^`\\n]+`)',
-    '(\\*\\*[^*\\n]+\\*\\*)',
-    '(__[^_\\n]+__)',
-    '(~~[^~\\n]+~~)',
-    '(\\*[^*\\n]+\\*)',
-    '(_[^_\\n]+_)',
-    '(\\[[^\\]\\n]*\\]\\([^)\\s]+\\))',
-    `(${SCHEMED_URL})`,
-    `(${BARE_URL})`,
-  ].join('|'),
-  'gi',
-);
+/**
+ * One address starting at a known offset.
+ *
+ * Sticky rather than global so a scan can ask "does an address begin *here*"
+ * without slicing the string: the bare-host guard is a lookbehind, and slicing
+ * would make every match look like it began at the start of a word.
+ */
+const URL_AT = new RegExp(`(?:${SCHEMED_URL}|${BARE_URL})`, 'iy');
 
 const TRAILING_URL = new RegExp(`(${SCHEMED_URL}|${BARE_URL})\\s*$`, 'i');
 
@@ -249,54 +243,179 @@ export function trailingUrl(text: string): { text: string; start: number; href: 
   };
 }
 
+/**
+ * Inline spans, parsed as a tree.
+ *
+ * The previous parser was one regular-expression pass, and one pass cannot nest.
+ * Nesting is not exotic: bold a phrase, then italicise a word inside it — two
+ * taps on the same toolbar. The flat parser read `**a *b* c**` as bold that began
+ * and ended inside the sentence, and the leftover markers were rendered as
+ * literal asterisks in text the user never typed with an asterisk. That is the
+ * "stray `*` symbols here and there" report.
+ *
+ * So a delimiter is matched by finding its closing run and parsing what is inside
+ * it, recursively. `value` stays the plain text — what a row, a search index and
+ * an accessible name want — and `children` carries the structure when there is
+ * any. The serialiser alternates delimiters (`**` for bold, `_` for italic when it
+ * sits inside bold) so the Markdown it writes back never lands in the genuinely
+ * ambiguous `***a** b*` shape.
+ */
 export function renderInline(text: string): InlineNode[] {
-  const nodes: InlineNode[] = [];
-  let cursor = 0;
-  INLINE_PATTERN.lastIndex = 0;
+  return parseInline(text, 0);
+}
 
-  let match: RegExpExecArray | null = INLINE_PATTERN.exec(text);
-  while (match !== null) {
-    if (match.index > cursor) {
-      nodes.push({ type: 'text', value: text.slice(cursor, match.index) });
+/** Deep enough for any formatting a person produces; a guard against pathology. */
+const MAX_INLINE_DEPTH = 8;
+
+function parseInline(text: string, depth: number): InlineNode[] {
+  if (text.length === 0) return [];
+  if (depth > MAX_INLINE_DEPTH) return [{ type: 'text', value: text }];
+
+  const nodes: InlineNode[] = [];
+  let buffer = '';
+  let index = 0;
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    nodes.push({ type: 'text', value: buffer });
+    buffer = '';
+  };
+
+  while (index < text.length) {
+    const char = text[index] as string;
+
+    if (char === '`') {
+      const end = text.indexOf('`', index + 1);
+      if (end > index + 1) {
+        flush();
+        nodes.push({ type: 'code', value: text.slice(index + 1, end) });
+        index = end + 1;
+        continue;
+      }
     }
-    const token = match[0];
-    const node = classifyInline(token);
-    if (node) nodes.push(node);
-    else nodes.push({ type: 'text', value: token });
-    cursor = match.index + token.length;
-    match = INLINE_PATTERN.exec(text);
+
+    if (char === '[') {
+      const link = /^\[([^\]\n]*)\]\(([^)\s]+)\)/.exec(text.slice(index));
+      if (link) {
+        flush();
+        const children = parseInline(link[1] ?? '', depth + 1);
+        nodes.push({
+          type: 'link',
+          href: link[2] ?? '',
+          value: plainText(children),
+          children,
+        });
+        index += link[0].length;
+        continue;
+      }
+    }
+
+    if (char === '*' || char === '_' || char === '~') {
+      const emphasis = emphasisAt(text, index, depth);
+      if (emphasis) {
+        flush();
+        nodes.push(emphasis.node);
+        index = emphasis.next;
+        continue;
+      }
+    }
+
+    /*
+     * An address, recognised at the character it starts on. The test is narrow on
+     * purpose: only a letter or digit can begin one, so most of a sentence is
+     * copied into the text buffer without running a regular expression at all.
+     */
+    if (/[a-z0-9]/i.test(char)) {
+      URL_AT.lastIndex = index;
+      const url = URL_AT.exec(text);
+      if (url && url.index === index && url[0].length > 0) {
+        flush();
+        const raw = url[0];
+        const schemed = /^https?:/i.test(raw);
+        nodes.push({
+          type: 'link',
+          value: schemed ? raw.replace(/^https?:\/\/(www\.)?/i, '') : raw.replace(/^www\./i, ''),
+          href: schemed ? raw : `https://${raw}`,
+        });
+        index += raw.length;
+        continue;
+      }
+    }
+
+    buffer += char;
+    index += 1;
   }
 
-  if (cursor < text.length) nodes.push({ type: 'text', value: text.slice(cursor) });
+  flush();
   return nodes;
 }
 
-function classifyInline(token: string): InlineNode | null {
-  if (token.startsWith('`')) return { type: 'code', value: token.slice(1, -1) };
-  if (token.startsWith('**')) return { type: 'bold', value: token.slice(2, -2) };
-  if (token.startsWith('__')) return { type: 'bold', value: token.slice(2, -2) };
-  if (token.startsWith('~~')) return { type: 'strike', value: token.slice(2, -2) };
-  if (token.startsWith('*')) return { type: 'italic', value: token.slice(1, -1) };
-  if (token.startsWith('_')) return { type: 'italic', value: token.slice(1, -1) };
+/** The words a run of inline nodes reads as, markers and all removed. */
+function plainText(nodes: readonly InlineNode[]): string {
+  return nodes
+    .map((node) => {
+      if (node.type === 'text') return node.value;
+      if ('children' in node && node.children) return plainText(node.children);
+      return node.value;
+    })
+    .join('');
+}
 
-  if (token.startsWith('[')) {
-    const link = /^\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
-    if (link) return { type: 'link', value: link[1] ?? '', href: link[2] ?? '' };
-    return null;
+/**
+ * Emphasis beginning at `index`, if it has a closing delimiter.
+ *
+ * A run is only closed by a run of exactly the same length, which is what makes
+ * `*a **b** c*` parse as italic around a bold word instead of italic that ends at
+ * the first asterisk of the bold.
+ */
+function emphasisAt(
+  text: string,
+  index: number,
+  depth: number,
+): { node: InlineNode; next: number } | null {
+  const delimiter = text[index] as string;
+  let run = 0;
+  while (text[index + run] === delimiter) run += 1;
+
+  const sizes = delimiter === '~' ? [2] : [3, 2, 1];
+  for (const size of sizes) {
+    if (run < size) continue;
+    const innerStart = index + size;
+    const close = closingRun(text, innerStart, delimiter, size);
+    if (close < 0) continue;
+    const inner = text.slice(innerStart, close);
+    if (inner.length === 0) continue;
+    const children = parseInline(inner, depth + 1);
+    const value = plainText(children);
+
+    if (delimiter === '~') return { node: { type: 'strike', value, children }, next: close + size };
+    if (size === 3) {
+      // A triple marker means both formats, which is how CommonMark reads it.
+      return {
+        node: { type: 'bold', value, children: [{ type: 'italic', value, children }] },
+        next: close + size,
+      };
+    }
+    if (size === 2) return { node: { type: 'bold', value, children }, next: close + size };
+    return { node: { type: 'italic', value, children }, next: close + size };
   }
-
-  if (/^https?:\/\//.test(token)) {
-    return { type: 'link', value: token.replace(/^https?:\/\/(www\.)?/, ''), href: token };
-  }
-
-  // A bare host, which is a link because the last label is a real top-level
-  // domain. The scheme is supplied rather than shown, so the text keeps the
-  // words the user actually wrote.
-  if (/\./.test(token) && token.length > 3) {
-    return { type: 'link', value: token.replace(/^www\./, ''), href: `https://${token}` };
-  }
-
   return null;
+}
+
+/** Offset of the next run of exactly `size` delimiters, or `-1`. */
+function closingRun(text: string, from: number, delimiter: string, size: number): number {
+  let index = from;
+  while (index < text.length) {
+    if (text[index] !== delimiter) {
+      index += 1;
+      continue;
+    }
+    let run = 0;
+    while (text[index + run] === delimiter) run += 1;
+    if (run === size) return index;
+    index += run;
+  }
+  return -1;
 }
 
 /**

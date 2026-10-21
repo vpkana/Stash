@@ -4,6 +4,7 @@ import * as React from 'react';
 import { ChevronRight, FilePlus2, NotebookPen, Search } from '@/components/ui/icons';
 import type { Note } from '@/db/types';
 import { useBackDismiss } from '@/hooks/use-back-dismiss';
+import { noteTitleText } from '@/lib/notes';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -61,7 +62,9 @@ export function SubnoteSheet({
   const matches = React.useMemo(() => {
     if (tokens.length === 0) return candidates.slice(0, 40);
     return candidates
-      .filter((note) => tokens.every((token) => note.title.toLowerCase().includes(token)))
+      .filter((note) =>
+        tokens.every((token) => noteTitleText(note.title).toLowerCase().includes(token)),
+      )
       .slice(0, 40);
   }, [candidates, tokens]);
 
@@ -154,7 +157,9 @@ export function SubnoteSheet({
                         className="tap flex w-full items-center gap-2 px-3 py-3 text-left active:bg-surface-2"
                       >
                         <span className="min-w-0 flex-1">
-                          <span className="text-row block break-words font-medium text-fg">{note.title}</span>
+                          <span className="text-row block break-words font-medium text-fg">
+                            {noteTitleText(note.title)}
+                          </span>
                           <span className="text-meta mt-0.5 block text-subtle">Becomes a subnote here</span>
                         </span>
                         <ChevronRight size={16} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />

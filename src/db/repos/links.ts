@@ -234,23 +234,30 @@ export async function setLinkOrder(
 
     const seen = new Set<string>();
     const placed: Array<{ id: string; sortOrder: number }> = [];
+    /*
+     * The row's index in the requested order — not the number of rows written so
+     * far. See `setFolderOrder` for what the difference costs: after an unchanged
+     * row, every later row was written one slot high, two rows ended up sharing a
+     * position, and the order that came back was not the one on screen.
+     */
+    let position = 0;
     for (const id of orderedIds) {
       const link = byId.get(id);
       if (!link || seen.has(id)) continue;
       seen.add(id);
-      const index = placed.length;
-      if (link.sortOrder !== index) placed.push({ id, sortOrder: index });
+      if (link.sortOrder !== position) placed.push({ id, sortOrder: position });
+      position += 1;
     }
 
     // Anything the caller did not mention keeps a place after the ones it did.
     const trailing = scope.filter((link) => !seen.has(link.id));
-    let next = placed.length;
     for (const link of trailing) {
-      if (link.sortOrder !== next) placed.push({ id: link.id, sortOrder: next });
-      next += 1;
+      if (link.sortOrder !== position) placed.push({ id: link.id, sortOrder: position });
+      position += 1;
     }
 
-    if (placed.length === 0) return false;
+    // Nothing to write means the stored order already is the requested one.
+    if (placed.length === 0) return true;
     await Promise.all(placed.map((entry) => db.links.update(entry.id, { sortOrder: entry.sortOrder })));
     return true;
   });

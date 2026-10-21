@@ -3,24 +3,22 @@
 import * as React from 'react';
 import {
   ArrowLeft,
-  Check,
   FilePlus2,
   FolderInput,
   Link2,
   Lock,
-  PencilLine,
   Star,
   Trash2,
   Unlock,
 } from '@/components/ui/icons';
 import type { Note, NoteDeletionImpact } from '@/db/types';
 import { pluralize } from '@/lib/format';
+import { noteTitleText } from '@/lib/notes';
 import { useBackDismiss } from '@/hooks/use-back-dismiss';
 import { useVaultStore, selectChildNotes, selectDescendantNoteCount } from '@/stores/vault-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { ActionList, ActionRow } from '@/components/ui/action-list';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { Sheet, SheetBody, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
@@ -35,7 +33,7 @@ import { NotePicker } from './note-picker';
  * deleted by a note, and the confirmation says so.
  */
 
-type Mode = 'actions' | 'rename' | 'move' | 'delete';
+type Mode = 'actions' | 'move' | 'delete';
 
 export interface NoteActionsSheetProps {
   note: Note | null;
@@ -52,7 +50,6 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
   const protectedId = note?.id ?? '';
   const isProtected = useVaultStore((state) => state.protection.notes.has(protectedId));
   const [mode, setMode] = React.useState<Mode>('actions');
-  const [title, setTitle] = React.useState(note?.title ?? '');
   const [impact, setImpact] = React.useState<NoteDeletionImpact | null>(null);
   const [busy, setBusy] = React.useState(false);
 
@@ -107,23 +104,6 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
     onOpenNote(result.note.id);
   };
 
-  const handleRename = async () => {
-    const trimmed = title.trim();
-    if (trimmed.length === 0) {
-      toast('Give the note a title', { tone: 'danger' });
-      return;
-    }
-    setBusy(true);
-    const ok = await useVaultStore.getState().renameNote(note.id, trimmed);
-    setBusy(false);
-    if (!ok) {
-      toast('Could not rename that note', { tone: 'danger' });
-      return;
-    }
-    toast('Note renamed', { tone: 'success' });
-    close();
-  };
-
   const handleMove = async (parentNoteId: string | null) => {
     setBusy(true);
     const result = await useVaultStore.getState().moveNote(note.id, parentNoteId);
@@ -170,13 +150,11 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
             ) : null}
             <div className="min-w-0 flex-1">
               <SheetTitle className="truncate">
-                {mode === 'rename'
-                  ? 'Rename note'
-                  : mode === 'move'
-                    ? 'Move note'
-                    : mode === 'delete'
-                      ? 'Delete note?'
-                      : note.title}
+                {mode === 'move'
+                  ? 'Move note'
+                  : mode === 'delete'
+                    ? 'Delete note?'
+                    : noteTitleText(note.title)}
               </SheetTitle>
               <p className="mt-0.5 truncate text-meta text-subtle">
                 {pluralize(childCount, 'subnote')}
@@ -188,24 +166,7 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
         </SheetHeader>
 
         <SheetBody>
-          {mode === 'rename' ? (
-            <div className="flex flex-col gap-3 px-3 pb-2">
-              <Input
-                value={title}
-                autoFocus
-                onChange={(event) => setTitle(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void handleRename();
-                  }
-                }}
-                aria-label="Note title"
-                maxLength={120}
-                enterKeyHint="done"
-              />
-            </div>
-          ) : mode === 'move' ? (
+          {mode === 'move' ? (
             <NotePicker
               notes={notes}
               selectedNoteId={note.parentNoteId}
@@ -216,51 +177,78 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
             />
           ) : mode === 'delete' ? (
             <div className="flex flex-col gap-3 px-4 pb-2">
-              <div className="pt-3">
-                <p className="text-row font-semibold text-fg">“{note.title}” contains</p>
-                <ul className="text-meta mt-1.5 flex flex-col gap-1 text-muted">
-                  <li>· {pluralize(childCount, 'direct subnote')}</li>
-                  <li>· {pluralize(descendantCount, 'note')} in total below it</li>
-                  <li>· {pluralize(impact?.referencedLinkCount ?? resourceCount, 'referenced link')}</li>
-                </ul>
-                <p className="mt-2.5 text-meta leading-relaxed text-subtle">
-                  Referenced links stay in your vault. Deleting a note only removes the note and the
-                  references to it.
+              {descendantCount > 0 || resourceCount > 0 ? (
+                <div className="pt-3">
+                  <p className="text-row font-semibold text-fg">“{noteTitleText(note.title)}” contains</p>
+                  <ul className="text-meta mt-1.5 flex flex-col gap-1 text-muted">
+                    {childCount > 0 ? <li>· {pluralize(childCount, 'direct subnote')}</li> : null}
+                    {descendantCount > childCount ? (
+                      <li>· {pluralize(descendantCount, 'note')} in total below it</li>
+                    ) : null}
+                    {resourceCount > 0 ? (
+                      <li>· {pluralize(impact?.referencedLinkCount ?? resourceCount, 'referenced link')}</li>
+                    ) : null}
+                  </ul>
+                  <p className="mt-2.5 text-meta leading-relaxed text-subtle">
+                    Referenced links stay in your vault. Deleting a note only removes the note and the
+                    references to it.
+                  </p>
+                </div>
+              ) : (
+                <p className="pt-3 text-meta leading-relaxed text-subtle">
+                  This note has no subnotes and no linked resources, so deleting it affects nothing else.
                 </p>
-              </div>
+              )}
 
-              <button
-                type="button"
-                onClick={() => void handleDelete('keep-children')}
-                disabled={busy}
-                className="tap flex w-full flex-col gap-1 rounded-xl border border-accent/30 bg-accent-soft p-3.5 text-left active:bg-accent-soft/70 disabled:opacity-50"
-              >
-                <span className="flex items-center gap-2">
-                  <span className="text-row font-semibold text-accent">Delete only this note</span>
-                  <span className="text-label font-semibold text-accent">
-                    Keeps subnotes
+              {descendantCount > 0 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete('keep-children')}
+                    disabled={busy}
+                    className="tap flex w-full flex-col gap-1 rounded-xl border border-accent/30 bg-accent-soft p-3.5 text-left active:bg-accent-soft/70 disabled:opacity-50"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="text-row font-semibold text-accent">Delete only this note</span>
+                      <span className="text-label font-semibold text-accent">Keeps subnotes</span>
+                    </span>
+                    <span className="text-meta leading-relaxed text-fg/80">
+                      Its {pluralize(childCount, 'subnote')} move up to where it sits now.
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete('delete-subtree')}
+                    disabled={busy}
+                    className="tap flex w-full flex-col gap-1 rounded-xl border border-danger/30 bg-danger-soft p-3.5 text-left active:bg-danger-soft/70 disabled:opacity-50"
+                  >
+                    <span className="text-row font-semibold text-danger">Delete this note and everything inside</span>
+                    <span className="text-meta leading-relaxed text-fg/80">
+                      {pluralize(descendantCount, 'note')} go to the trash with it and come back together.
+                    </span>
+                  </button>
+                </>
+              ) : (
+                /*
+                 * One note, nothing inside it: there is no strategy to choose.
+                 * Asking "delete only this note, or this note and everything
+                 * inside" when there is nothing inside is a question with one
+                 * answer, and a second button that does the same thing is worse
+                 * than no button at all.
+                 */
+                <button
+                  type="button"
+                  onClick={() => void handleDelete('keep-children')}
+                  disabled={busy}
+                  className="tap flex w-full flex-col gap-1 rounded-xl border border-danger/30 bg-danger-soft p-3.5 text-left active:bg-danger-soft/70 disabled:opacity-50"
+                >
+                  <span className="text-row font-semibold text-danger">Delete note</span>
+                  <span className="text-meta leading-relaxed text-fg/80">
+                    It goes to Trash, where it can be restored.
                   </span>
-                </span>
-                <span className="text-meta leading-relaxed text-fg/80">
-                  {childCount > 0
-                    ? `Its ${pluralize(childCount, 'subnote')} move up to where it sits now.`
-                    : 'Nothing else is affected.'}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void handleDelete('delete-subtree')}
-                disabled={busy}
-                className="tap flex w-full flex-col gap-1 rounded-xl border border-danger/30 bg-danger-soft p-3.5 text-left active:bg-danger-soft/70 disabled:opacity-50"
-              >
-                <span className="text-row font-semibold text-danger">Delete this note and everything inside</span>
-                <span className="text-meta leading-relaxed text-fg/80">
-                  {descendantCount > 0
-                    ? `${pluralize(descendantCount, 'note')} go to the trash with it and come back together.`
-                    : 'No subnotes to remove.'}
-                </span>
-              </button>
+                </button>
+              )}
 
               <Button variant="ghost" className="w-full" onClick={() => setMode('actions')} disabled={busy}>
                 Cancel
@@ -272,11 +260,6 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
                 icon={<FilePlus2 size={18} strokeWidth={1.9} aria-hidden />}
                 label="Add a subnote"
                 onClick={() => void addSubnote()}
-              />
-              <ActionRow
-                icon={<PencilLine size={18} strokeWidth={1.9} aria-hidden />}
-                label="Rename note"
-                onClick={() => setMode('rename')}
               />
               <ActionRow
                 icon={<FolderInput size={18} strokeWidth={1.9} aria-hidden />}
@@ -358,14 +341,7 @@ export function NoteActionsSheet({ note, onClose, onOpenNote, onDeleted }: NoteA
           )}
         </SheetBody>
 
-        {mode === 'rename' ? (
-          <SheetFooter>
-            <Button variant="primary" size="lg" className="w-full" onClick={() => void handleRename()} disabled={busy}>
-              <Check size={18} strokeWidth={2.4} aria-hidden />
-              Save title
-            </Button>
-          </SheetFooter>
-        ) : mode === 'actions' ? (
+        {mode === 'actions' ? (
           <SheetFooter>
             <Button variant="surface" className="w-full" onClick={close}>
               Close

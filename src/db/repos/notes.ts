@@ -215,6 +215,51 @@ export async function reorderNote(id: string, direction: 'up' | 'down'): Promise
   });
 }
 
+/**
+ * Write an explicit sibling order for notes.
+ *
+ * The same contract as `setFolderOrder` and `setLinkOrder`, including the detail
+ * that cost those two a bug: a row's position is its index in the order the
+ * caller sent, not the number of rows written so far. Skipping unchanged rows is
+ * an optimisation; letting their positions shift because they were skipped is not.
+ *
+ * `updatedAt` is untouched — moving a note is not editing it.
+ */
+export async function setNoteOrder(
+  parentNoteId: string | null,
+  orderedIds: readonly string[],
+): Promise<boolean> {
+  return db.transaction('rw', db.notes, async () => {
+    const siblings = await db.notes
+      .filter((note) => (note.parentNoteId ?? null) === (parentNoteId ?? null))
+      .toArray();
+    const byId = new Map(siblings.map((note) => [note.id, note]));
+
+    const seen = new Set<string>();
+    const placed: Array<{ id: string; sortOrder: number }> = [];
+    let position = 0;
+    for (const id of orderedIds) {
+      const note = byId.get(id);
+      if (!note || seen.has(id)) continue;
+      seen.add(id);
+      if (note.sortOrder !== position) placed.push({ id, sortOrder: position });
+      position += 1;
+    }
+
+    const trailing = siblings.filter((note) => !seen.has(note.id));
+    for (const note of trailing) {
+      if (note.sortOrder !== position) placed.push({ id: note.id, sortOrder: position });
+      position += 1;
+    }
+
+    if (placed.length === 0) return true;
+    // A sealed row is written through `update`, which merges: the ciphertext stays
+    // and only the position changes.
+    await Promise.all(placed.map((entry) => db.notes.update(entry.id, { sortOrder: entry.sortOrder })));
+    return true;
+  });
+}
+
 export async function setNoteFavorite(id: string, isFavorite: boolean): Promise<void> {
   await db.notes.update(id, { isFavorite, updatedAt: Date.now() });
 }

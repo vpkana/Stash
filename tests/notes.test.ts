@@ -17,6 +17,7 @@ import {
   contentFromLink,
   deriveNoteTitle,
   notePlainText,
+  noteTitleText,
   notePreview,
   sanitizeNoteTitle,
   titleFromLink,
@@ -226,6 +227,20 @@ describe('title derivation', () => {
   it('sanitizes whitespace and caps length', () => {
     expect(sanitizeNoteTitle('  spaced   out  ')).toBe('spaced out');
     expect(sanitizeNoteTitle('x'.repeat(500))).toHaveLength(120);
+  });
+});
+
+describe('title projection', () => {
+  it('shows a formatted title as words, not as its markers', () => {
+    // A title is part of the note and can carry emphasis; every list row, crumb
+    // and accessible name wants the words without the Markdown that stores it.
+    expect(noteTitleText('**Design** notes')).toBe('Design notes');
+    expect(noteTitleText('a *quiet* idea')).toBe('a quiet idea');
+    expect(noteTitleText('plain title')).toBe('plain title');
+  });
+
+  it('keeps a title that has no formatting untouched', () => {
+    expect(noteTitleText('Q3 planning — the sequel')).toBe('Q3 planning — the sequel');
   });
 });
 

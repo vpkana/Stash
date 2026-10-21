@@ -27,6 +27,7 @@ import { useAutosave } from '@/hooks/use-autosave';
 import { useEditorStore } from '@/stores/editor-store';
 import { cn } from '@/lib/utils';
 import { RichTextEditor, type RichTextApi } from './rich-text-editor';
+import { NoteTitle, type NoteTitleApi } from './note-title';
 import { MarkdownView } from './markdown-view';
 
 /**
@@ -141,7 +142,8 @@ export function NoteEditor({
   const [formats, setFormats] = React.useState<FormatState>(NO_FORMATS);
 
   const apiRef = React.useRef<RichTextApi | null>(null);
-  const titleRef = React.useRef<HTMLInputElement>(null);
+  const titleApiRef = React.useRef<NoteTitleApi | null>(null);
+
 
   const persisted = React.useMemo(
     () => ({ title: note.title, content: note.content }),
@@ -197,30 +199,49 @@ export function NoteEditor({
   const statusText = autosaveLabel(status);
   const dirty = draft.title !== persisted.title || draft.content !== persisted.content;
 
+  /**
+   * Run one toolbar command on the right surface.
+   *
+   * Inline formats follow the last surface touched; structure (a list, a heading,
+   * a quote) belongs to the body by definition — a title has no second line to put
+   * an item on.
+   */
+  const runCommand = React.useCallback((command: EditorCommand) => {
+    // Size is a block property; the title's size belongs to the layout.
+    const inline =
+      command === 'bold' || command === 'italic' || command === 'strike' || command === 'code';
+    /*
+     * Which surface is focused is read from the DOM at the moment of the press,
+     * not remembered from a focus event. The toolbar keeps focus where it was
+     * (`mousedown` is cancelled), so `activeElement` is exactly the surface the
+     * user is looking at — and unlike a stored flag it cannot be stale, or miss a
+     * focus that arrived in the same tick as the tap.
+     */
+    const surface = document.activeElement?.closest('[data-surface]')?.getAttribute('data-surface');
+    if (surface === 'title' && inline) {
+      titleApiRef.current?.run(command);
+      return;
+    }
+    apiRef.current?.run(command);
+  }, []);
+
   return (
     <div className="flex flex-col">
       <div className="flex items-start gap-2 px-4 pt-1">
-        <input
-          ref={titleRef}
+        <NoteTitle
           value={draft.title}
-          onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              void flush();
-              apiRef.current?.focus();
-            }
-          }}
+          onChange={(title) => setDraft((current) => ({ ...current, title }))}
           placeholder="Title"
-          aria-label="Note title"
-          maxLength={120}
-          autoComplete="off"
           readOnly={readOnly}
-          enterKeyHint="next"
-          className={cn(
-            'min-w-0 flex-1 bg-transparent pt-1 text-display leading-tight font-semibold tracking-tight text-fg',
-            'placeholder:text-subtle focus:outline-none',
-          )}
+          onEnter={() => {
+            void flush();
+            apiRef.current?.focus();
+          }}
+          onFormatStateChange={setFormats}
+          onReady={(api) => {
+            titleApiRef.current = api;
+          }}
+          className="pt-1 text-display leading-tight font-semibold tracking-tight text-fg"
         />
 
         {/*
@@ -366,16 +387,30 @@ export function NoteEditor({
           </div>
         ) : (
           <div className="scroll-area no-scrollbar flex items-center gap-1 overflow-x-auto px-2 py-1.5">
-            <ToolButton label="Bold" icon={<Bold size={17} weight="bold" aria-hidden />} command="bold" api={apiRef} active={formats.bold} />
-            <ToolButton label="Italic" icon={<Italic size={17} weight="bold" aria-hidden />} command="italic" api={apiRef} active={formats.italic} />
-            <ToolButton label="Strikethrough" icon={<Strikethrough size={17} weight="bold" aria-hidden />} command="strike" api={apiRef} active={formats.strike} />
-            <ToolButton label="Inline code" icon={<Code size={17} weight="bold" aria-hidden />} command="code" api={apiRef} active={formats.code} />
+            <ToolButton label="Bold" icon={<Bold size={17} weight="bold" aria-hidden />} command="bold" onRun={runCommand} active={formats.bold} />
+            <ToolButton label="Italic" icon={<Italic size={17} weight="bold" aria-hidden />} command="italic" onRun={runCommand} active={formats.italic} />
+            <ToolButton label="Strikethrough" icon={<Strikethrough size={17} weight="bold" aria-hidden />} command="strike" onRun={runCommand} active={formats.strike} />
+            <ToolButton label="Inline code" icon={<Code size={17} weight="bold" aria-hidden />} command="code" onRun={runCommand} active={formats.code} />
             <Divider />
-            <ToolButton label="Heading" icon={<Heading2 size={17} weight="bold" aria-hidden />} command="heading" api={apiRef} />
-            <ToolButton label="Bulleted list" icon={<List size={17} weight="bold" aria-hidden />} command="bulletList" api={apiRef} />
-            <ToolButton label="Numbered list" icon={<ListOrdered size={17} weight="bold" aria-hidden />} command="orderedList" api={apiRef} />
-            <ToolButton label="Checklist" icon={<ListChecks size={17} weight="bold" aria-hidden />} command="checklist" api={apiRef} />
-            <ToolButton label="Quote" icon={<Quote size={17} weight="bold" aria-hidden />} command="quote" api={apiRef} />
+            {/* Text size, on the left where the writing decisions are. */}
+            <ToolButton
+              label="Smaller text"
+              icon={<span className="text-meta font-semibold leading-none">A<span className="align-super text-[0.65em]">−</span></span>}
+              command="smaller"
+              onRun={runCommand}
+            />
+            <ToolButton
+              label="Larger text"
+              icon={<span className="text-body font-semibold leading-none">A<span className="align-super text-[0.65em]">+</span></span>}
+              command="larger"
+              onRun={runCommand}
+            />
+            <Divider />
+            <ToolButton label="Heading" icon={<Heading2 size={17} weight="bold" aria-hidden />} command="heading" onRun={runCommand} />
+            <ToolButton label="Bulleted list" icon={<List size={17} weight="bold" aria-hidden />} command="bulletList" onRun={runCommand} />
+            <ToolButton label="Numbered list" icon={<ListOrdered size={17} weight="bold" aria-hidden />} command="orderedList" onRun={runCommand} />
+            <ToolButton label="Checklist" icon={<ListChecks size={17} weight="bold" aria-hidden />} command="checklist" onRun={runCommand} />
+            <ToolButton label="Quote" icon={<Quote size={17} weight="bold" aria-hidden />} command="quote" onRun={runCommand} />
             <Divider />
             <button
               type="button"
@@ -413,20 +448,22 @@ function ToolButton({
   label,
   icon,
   command,
-  api,
+  onRun,
   active = false,
 }: {
   label: string;
   icon: React.ReactNode;
   command: EditorCommand;
-  api: React.RefObject<RichTextApi | null>;
+  onRun: (command: EditorCommand) => void;
   active?: boolean;
 }) {
   return (
     <button
       type="button"
+      // `preventDefault` keeps the caret in whichever surface is being edited; a
+      // button that takes focus would lose the selection it is about to format.
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => api.current?.run(command)}
+      onClick={() => onRun(command)}
       aria-label={label}
       aria-pressed={active}
       title={label}

@@ -1,60 +1,77 @@
 'use client';
 
 import * as React from 'react';
+import {
+  dropIndex,
+  moveWithin,
+  previewShift,
+  sameOrder,
+  type RowBox,
+} from '@/lib/drag-order';
 
 /**
  * Reorder a short list by dragging one of its rows.
  *
  * Written rather than installed, and that is a deliberate call. What this serves
- * is a run of sibling folders — usually a handful, never hundreds — and it needs
- * one gesture, one drop indicator and a persisted order. A general drag-and-drop
+ * is a run of sibling folders or links — usually a handful, never hundreds — and
+ * it needs one gesture, one preview and a persisted order. A general drag-and-drop
  * toolkit would bring a sensor system, collision detection, an overlay portal and
  * an animation layer to do that, and each of those is another thing that can
  * disagree with a phone's scroll gesture.
  *
- * ## The gesture, and why it is a long press
+ * ## The gesture
  *
- * The row is *the* drag target: press and hold anywhere on a folder and the whole
- * row lifts, loses some opacity and follows the finger or the cursor. No grip, no
- * handle, no separate hit target to find with a thumb.
- *
- * The long press is what makes that unambiguous. A row is also a button that
- * opens a folder and part of a list that scrolls, so the three gestures have to be
- * told apart before they start:
- *
- *  - **a quick press that ends** is a tap, and opens the folder;
- *  - **a press that moves early** is a scroll (or a drag of the list), so the
- *    pending lift is cancelled the moment the pointer travels further than the
- *    touch slop;
- *  - **a press that is held still for {@link LONG_PRESS_MS}** is a drag: the row
- *    is lifted, and from that instant the gesture belongs to the list.
+ * The six-dot grip is the handle and lifts the row the instant it is pressed; the
+ * rest of the row keeps a long press, because it is also a button that opens
+ * something and part of a list that scrolls. A press that moves early is a scroll,
+ * and the pending lift is cancelled.
  *
  * The one thing that cannot be left to CSS is scrolling. Setting `touch-action:
- * none` on the row would break the list for every other gesture, so instead the
- * scroll is suppressed *only while a drop is in flight*, by cancelling
- * `touchmove` — attached imperatively at the moment of the lift, because the
- * browser reads `touch-action` when the finger goes down and a listener added a
- * render later could be a listener added after the page already scrolled.
+ * none` on the row would break the list for every other gesture, so the scroll is
+ * suppressed *only while a drop is in flight*, by cancelling `touchmove` —
+ * attached imperatively at the moment of the lift, because the browser reads
+ * `touch-action` when the finger goes down.
  *
  * ## What moves
  *
- * **Nothing re-lays-out while dragging.** The lifted row is moved with a
- * transform and the insertion point is shown with an edge line; the rows
- * underneath do not shuffle. Rows that physically reorder under the finger are
- * pretty and untestable, and they also make the drop target ambiguous — a line
- * that says exactly where the row will land is neither.
+ * The dragged row follows the pointer with a transform at slightly raised opacity.
+ * The rows between it and the prospective slot slide by exactly one row-height in
+ * the opposite direction, so the list **opens the gap where the row will land**:
+ * a preview of the result instead of a line drawn across the row it is about to
+ * replace. Nothing is measured again mid-drag — the geometry is captured once at
+ * the lift, before any transform exists, and every later position is computed
+ * from it.
+ *
+ * That capture is the fix for a dragging bug that was invisible in the code and
+ * obvious in the hand: the old hook measured the dragged row *after* applying its
+ * transform, inside the same event that had just set it. React had not committed
+ * the transform yet, so the measurement was always one frame stale, the computed
+ * slot lagged the pointer, and a drag that ended between two rows claimed to be
+ * somewhere else entirely. With the layout frozen at the lift there is nothing to
+ * lag.
  *
  * Keyboard parity rides along: Arrow Up and Arrow Down move a focused row one
- * slot, so the feature a mouse gets is not a feature only a mouse gets.
+ * slot, through the same order arithmetic as a drop.
  */
 
 export interface DragSortState {
   /** The row being dragged, or `null`. */
   draggingId: string | null;
-  /** Where it would land, as an index into the list the caller passed. */
+  /** Where it would land, as an index into the list without the dragged row. */
   overIndex: number | null;
   /** True while the dragged row is over the caller's "move out" zone. */
   overOut: boolean;
+  /**
+   * The row the dragged one is hovering *over*, when the list accepts drops onto
+   * rows rather than only between them.
+   *
+   * Notes use this: dragging one note onto another nests it there, which is the
+   * same gesture as dragging a link into a folder — the destination is the thing
+   * under the finger. It is a separate value from `overIndex` because the two
+   * answers are different kinds of drop: a slot means "put it here in this list",
+   * a row means "put it inside that one".
+   */
+  targetId: string | null;
 }
 
 /** Props for a "move out of this directory" drop target. */
@@ -74,11 +91,10 @@ export interface DragRowProps {
   onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
   'aria-roledescription': string;
   'data-dragging': boolean;
-  /**
-   * Where the insertion line goes for this row: `top` when the dragged row comes
-   * from below, `bottom` when it comes from above, `none` otherwise.
-   */
-  'data-drop-edge': 'top' | 'bottom' | 'none';
+  /** True while the dragged item is hovering this row as a destination. */
+  'data-drop-target': boolean;
+  /** Which way this row is sliding to open the drop gap, for CSS and tests. */
+  'data-drag-preview': 'up' | 'down' | 'none';
   style: React.CSSProperties;
   className: string;
 }
@@ -102,11 +118,16 @@ export interface UseDragSortOptions {
    * `Move to another folder` menu row listing the whole tree, which is a
    * question the user has already answered by dragging the thing they want moved
    * onto where they want it to go.
-   *
-   * The dragged row's id is passed because one hook instance serves the whole
-   * list and only the hook knows which row the gesture started on.
    */
   onDropOut?: (id: string) => void;
+  /**
+   * Called when the drag ends *on another row*, rather than between two.
+   *
+   * Supplying it is what turns the rows into drop targets: while a drag is over a
+   * row, that row lights up and the reorder preview is cleared, because the drop
+   * that is about to happen is not a reorder.
+   */
+  onDropOn?: (id: string, targetId: string) => void;
 }
 
 export interface UseDragSortResult {
@@ -135,6 +156,25 @@ export interface UseDragSortResult {
 const LONG_PRESS_MS = 280;
 /** Movement before the lift that means the finger is scrolling, not dragging. */
 const SLOP_PX = 8;
+/**
+ * How long a swallowed click is remembered.
+ *
+ * Browsers send the click immediately after `pointerup`, but a gesture that ends
+ * somewhere the click never lands — dropped outside the window, or ended by a
+ * cancel — would otherwise leave the flag set and eat the *next* genuine tap.
+ */
+const CLICK_GUARD_MS = 400;
+
+interface LiveDrag {
+  dy: number;
+  overIndex: number | null;
+  overOut: boolean;
+  targetId: string | null;
+  /** Height of the dragged row, captured at the lift. */
+  height: number;
+}
+
+const IDLE: LiveDrag = { dy: 0, overIndex: null, overOut: false, targetId: null, height: 0 };
 
 export function useDragSort({
   ids,
@@ -142,23 +182,48 @@ export function useDragSort({
   noun = 'item',
   labelOf,
   onDropOut,
+  onDropOn,
 }: UseDragSortOptions): UseDragSortResult {
-  const [state, setState] = React.useState<DragSortState & { dy: number }>({
+  const [state, setState] = React.useState<DragSortState & { dy: number; height: number }>({
     draggingId: null,
     overIndex: null,
     overOut: false,
+    targetId: null,
     dy: 0,
+    height: 0,
   });
 
   const rows = React.useRef(new Map<string, HTMLElement>());
   /** The caller's "move out" target, when it rendered one. */
   const outZone = React.useRef<HTMLElement | null>(null);
   const orderRef = React.useRef<readonly string[]>(ids);
+  /**
+   * Geometry captured at the lift.
+   *
+   * Everything positional is answered from this snapshot rather than from a live
+   * `getBoundingClientRect`, because during a drag two things are transforming:
+   * the dragged row (which follows the pointer) and every row sliding to open the
+   * gap. Measuring mid-drag would feed those transforms back into the decision
+   * that produces them.
+   */
+  const layout = React.useRef<ReadonlyMap<string, RowBox>>(new Map());
+  /** The dragged row's own untouched box, used as the origin of its centre. */
+  const startBox = React.useRef<RowBox | null>(null);
+  /**
+   * The drag's live values, updated synchronously.
+   *
+   * `pointerup` can arrive in the same frame as the last `pointermove`, before
+   * React has committed the new state; reading the render's `state` there would
+   * drop onto the previous slot — or miss the "move out" zone entirely, which is
+   * how a drag meant to take a link out of a folder used to reorder it instead.
+   */
+  const live = React.useRef<LiveDrag>(IDLE);
   /** The row a press is *pending* on. Cleared by movement, release or a lift. */
   const armed = React.useRef<string | null>(null);
   /** The row whose drag is live. Only ever set by the long-press timer. */
   const active = React.useRef<string | null>(null);
   const timer = React.useRef<number | null>(null);
+  const clickGuard = React.useRef<number | null>(null);
   const startY = React.useRef(0);
   const startX = React.useRef(0);
   /** Swallows the click that follows a lift, exactly once. */
@@ -191,39 +256,53 @@ export function useDragSort({
     blockScroll.current = null;
   }, []);
 
+  const rememberClickGuard = React.useCallback(() => {
+    if (clickGuard.current !== null) window.clearTimeout(clickGuard.current);
+    clickGuard.current = window.setTimeout(() => {
+      clickGuard.current = null;
+      swallow.current = false;
+    }, CLICK_GUARD_MS);
+  }, []);
+
   // A row scrolled out of the list (or a screen unmounted) while a press was
   // pending must not leave a timer behind to lift something that is gone.
   React.useEffect(
     () => () => {
       clearTimer();
       releaseScrollBlock();
+      if (clickGuard.current !== null) window.clearTimeout(clickGuard.current);
     },
     [clearTimer, releaseScrollBlock],
   );
 
-  /**
-   * Which slot the dragged row's live centre is over.
-   *
-   * Measured against the *other* rows' centres rather than their edges, so the
-   * answer changes halfway through a row rather than the instant the pointer
-   * touches it. Clamped to the list, so dragging past the end parks at the end
-   * instead of doing nothing.
-   */
+  /** Reset the live drag, leaving the state the renderer reads in sync. */
+  const resetLive = React.useCallback(() => {
+    live.current = IDLE;
+    startBox.current = null;
+    layout.current = new Map();
+    setState({ draggingId: null, overIndex: null, overOut: false, targetId: null, dy: 0, height: 0 });
+  }, []);
+
+  /** The slot the dragged row's centre at `y` would land in. */
   const slotFor = React.useCallback((id: string, y: number): number => {
-    const order = orderRef.current;
-    let index = order.length - 1;
-    for (let position = 0; position < order.length; position += 1) {
-      const otherId = order[position] as string;
-      if (otherId === id) continue;
-      const element = rows.current.get(otherId);
-      if (!element) continue;
-      const box = element.getBoundingClientRect();
-      if (y < box.top + box.height / 2) {
-        index = position;
-        break;
-      }
+    const others = orderRef.current.filter((candidate) => candidate !== id);
+    return dropIndex(others, layout.current, y);
+  }, []);
+
+  /**
+   * The row directly under `y`, ignoring the one being dragged.
+   *
+   * Answered from the geometry frozen at the lift, so sliding rows and the lifted
+   * row's own transform cannot make the target jump. `-1` at the top of a box and
+   * `+1` at the bottom keep the hit area on the row's own pixels and not on the
+   * hairline between two.
+   */
+  const rowUnder = React.useCallback((y: number, draggedId: string): string | null => {
+    for (const [id, box] of layout.current) {
+      if (id === draggedId) continue;
+      if (y >= box.top && y <= box.top + box.height) return id;
     }
-    return Math.max(0, Math.min(order.length - 1, index));
+    return null;
   }, []);
 
   const consumeDrag = React.useCallback(() => {
@@ -235,22 +314,29 @@ export function useDragSort({
   const finish = React.useCallback(
     (id: string, overIndex: number) => {
       const order = orderRef.current;
-      const from = order.indexOf(id);
-      setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
-      if (from < 0 || from === overIndex || !onReorder) return;
-      const next = order.slice();
-      next.splice(from, 1);
-      next.splice(overIndex, 0, id);
+      const next = moveWithin(order, id, overIndex);
+      resetLive();
+      if (!onReorder || sameOrder(order, next)) return;
       onReorder(next);
     },
-    [onReorder],
+    [onReorder, resetLive],
   );
+
+  /**
+   * The gap preview, computed once per render rather than per row.
+   *
+   * Zero for every row when nothing is being dragged, and for the dragged row
+   * always — it is following the pointer, not taking its place yet.
+   */
+  const shifts = React.useMemo(() => {
+    if (!state.draggingId || state.overIndex === null || state.overOut || state.targetId) return null;
+    return previewShift(ids, state.draggingId, state.overIndex, state.height);
+  }, [ids, state.draggingId, state.overIndex, state.overOut, state.targetId, state.height]);
 
   const getRowProps = React.useCallback(
     (id: string, index: number): DragRowProps => {
       const isDragged = state.draggingId === id;
-      const isTarget = state.draggingId !== null && !isDragged && state.overIndex === index;
-      const fromIndex = state.draggingId ? ids.indexOf(state.draggingId) : -1;
+      const shift = isDragged ? 0 : (shifts?.get(id) ?? 0);
       const label = labelOf(id).trim();
 
       return {
@@ -278,25 +364,45 @@ export function useDragSort({
 
           const element = event.currentTarget;
           const pointerId = event.pointerId;
-          timer.current = window.setTimeout(() => {
-            timer.current = null;
-            if (armed.current !== id) return;
-            // The lift. From here the pointer belongs to the list, so the scroll
-            // has to be stopped before it starts.
-            active.current = id;
-            swallow.current = true;
-            try {
-              element.setPointerCapture(pointerId);
-            } catch {
-              /* no pointer capture available; the move handler still works */
-            }
-            const block = (touch: TouchEvent) => {
-              if (touch.cancelable) touch.preventDefault();
-            };
-            blockScroll.current = block;
-            document.addEventListener('touchmove', block, { passive: false });
-            setState({ draggingId: id, overIndex: index, overOut: false, dy: 0 });
-          }, grip ? 0 : LONG_PRESS_MS);
+          timer.current = window.setTimeout(
+            () => {
+              timer.current = null;
+              if (armed.current !== id) return;
+              // The lift. From here the pointer belongs to the list, so the scroll
+              // has to be stopped before it starts.
+              active.current = id;
+              swallow.current = true;
+              rememberClickGuard();
+              try {
+                element.setPointerCapture(pointerId);
+              } catch {
+                /* no pointer capture available; the move handler still works */
+              }
+              const block = (touch: TouchEvent) => {
+                if (touch.cancelable) touch.preventDefault();
+              };
+              blockScroll.current = block;
+              document.addEventListener('touchmove', block, { passive: false });
+
+              /*
+               * Freeze the geometry here, while every row is still in its resting
+               * place: no transform has been committed for this drag yet, so these
+               * are the boxes the drag is measured against for its whole life.
+               */
+              const boxes = new Map<string, RowBox>();
+              for (const [rowId, row] of rows.current) {
+                const box = row.getBoundingClientRect();
+                boxes.set(rowId, { top: box.top, height: box.height });
+              }
+              layout.current = boxes;
+              const own = boxes.get(id) ?? null;
+              startBox.current = own;
+              const height = own?.height ?? 0;
+              live.current = { dy: 0, overIndex: index, overOut: false, targetId: null, height };
+              setState({ draggingId: id, overIndex: index, overOut: false, targetId: null, dy: 0, height });
+            },
+            grip ? 0 : LONG_PRESS_MS,
+          );
         },
 
         onPointerMove: (event) => {
@@ -315,10 +421,12 @@ export function useDragSort({
           if (event.cancelable) event.preventDefault();
 
           const dy = event.clientY - startY.current;
+          live.current.dy = dy;
+
           /*
            * Over the "move out" zone the row is not being reordered at all, so the
-           * insertion line is cleared rather than left pointing at a slot the drop
-           * will not use.
+           * preview is cleared rather than left pointing at a slot the drop will
+           * not use.
            */
           const zone = outZone.current;
           let overOut = false;
@@ -331,20 +439,51 @@ export function useDragSort({
               event.clientY <= box.bottom;
           }
           if (overOut) {
+            live.current.overIndex = null;
+            live.current.overOut = true;
+            live.current.targetId = null;
             setState((current) =>
-              current.draggingId === id ? { ...current, dy, overIndex: null, overOut: true } : current,
+              current.draggingId === id
+                ? { ...current, dy, overIndex: null, overOut: true, targetId: null }
+                : current,
             );
             return;
           }
 
-          // The lifted row already carries the transform, so its measured centre
-          // *is* the live centre — nothing has to be added back in, and the
-          // measurement stays right however far the pointer travels.
-          const rect = rows.current.get(id)?.getBoundingClientRect();
-          const centre = rect ? rect.top + rect.height / 2 : event.clientY;
+          /*
+           * A row under the finger, when the list accepts drops *onto* rows. The
+           * answer comes from the frozen boxes for the same reason the slot does:
+           * the row being dragged is carrying a transform, and hit-testing a
+           * moving element would make the target flicker as it follows the
+           * pointer.
+           */
+          if (onDropOn) {
+            const target = rowUnder(event.clientY, id);
+            if (target) {
+              live.current = { ...live.current, dy, overIndex: null, overOut: false, targetId: target };
+              setState((current) =>
+                current.draggingId === id
+                  ? { ...current, dy, overIndex: null, overOut: false, targetId: target }
+                  : current,
+              );
+              return;
+            }
+          }
+
+          /*
+           * The centre is derived from the box captured at the lift, not measured
+           * now: the row under the finger is carrying this drag's transform, and
+           * the rows around it are animating to open the gap.
+           */
+          const box = startBox.current;
+          const centre = box ? box.top + box.height / 2 + dy : event.clientY;
+          const overIndex = slotFor(id, centre);
+          live.current.overIndex = overIndex;
+          live.current.overOut = false;
+          live.current.targetId = null;
           setState((current) =>
             current.draggingId === id
-              ? { ...current, dy, overIndex: slotFor(id, centre), overOut: false }
+              ? { ...current, dy, overIndex, overOut: false, targetId: null }
               : current,
           );
         },
@@ -360,15 +499,36 @@ export function useDragSort({
           } catch {
             /* the capture is already gone; nothing to release */
           }
-          // A drop on the way out ends the drag as a *move*, not a reorder: the
-          // item leaves this list, so there is no new order to write.
-          if (state.overOut && onDropOut) {
-            setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
-            swallow.current = false;
+
+          /*
+           * A drop on the way out ends the drag as a *move*, not a reorder: the
+           * item leaves this list, so there is no new order to write. Read from
+           * the live ref, because this can run before React commits the last move.
+           */
+          if (live.current.overOut && onDropOut) {
+            resetLive();
+            rememberClickGuard();
             onDropOut(id);
             return;
           }
-          finish(id, state.overIndex ?? index);
+
+          // A drop on another row is a move *into* it, so there is no new order
+          // for this list to write.
+          if (live.current.targetId && onDropOn) {
+            const target = live.current.targetId;
+            resetLive();
+            rememberClickGuard();
+            onDropOn(id, target);
+            return;
+          }
+
+          const box = startBox.current;
+          const centre = box
+            ? box.top + box.height / 2 + (event.clientY - startY.current)
+            : event.clientY;
+          const overIndex = live.current.overIndex ?? slotFor(id, centre);
+          rememberClickGuard();
+          finish(id, overIndex);
         },
 
         onPointerCancel: () => {
@@ -379,7 +539,7 @@ export function useDragSort({
           // interrupted). Nothing moves: the list is left exactly as it was.
           active.current = null;
           releaseScrollBlock();
-          setState({ draggingId: null, overIndex: null, overOut: false, dy: 0 });
+          resetLive();
         },
 
         onKeyDown: (event) => {
@@ -388,11 +548,11 @@ export function useDragSort({
           event.preventDefault();
           const order = orderRef.current;
           const from = order.indexOf(id);
-          const to = event.key === 'ArrowUp' ? from - 1 : from + 1;
-          if (from < 0 || to < 0 || to >= order.length) return;
-          const next = order.slice();
-          next.splice(from, 1);
-          next.splice(to, 0, id);
+          if (from < 0) return;
+          const to = from + (event.key === 'ArrowUp' ? -1 : 1);
+          if (to < 0 || to > order.length - 1) return;
+          const next = moveWithin(order, id, to);
+          if (sameOrder(order, next)) return;
           onReorder(next);
         },
 
@@ -407,31 +567,36 @@ export function useDragSort({
           ? `Reorderable ${noun}, ${label}`
           : `Reorderable ${noun}`,
         'data-dragging': isDragged,
-        'data-drop-edge': (isTarget ? (fromIndex > index ? 'top' : 'bottom') : 'none') as
-          | 'top'
-          | 'bottom'
-          | 'none',
+        'data-drop-target': state.targetId === id,
+        'data-drag-preview': shift < 0 ? 'up' : shift > 0 ? 'down' : 'none',
         style: isDragged
-          ? { transform: `translate3d(0, ${state.dy}px, 0) scale(1.02)`, zIndex: 5 }
-          : ({} as React.CSSProperties),
-        className: ['row-drag', isDragged ? 'row-drag-lifted' : ''].filter(Boolean).join(' '),
+          ? { transform: `translate3d(0, ${state.dy}px, 0) scale(1.02)`, zIndex: 6 }
+          : shift !== 0
+            ? { transform: `translate3d(0, ${shift}px, 0)` }
+            : {},
+        className: ['row-drag', isDragged ? 'row-drag-lifted' : '', state.targetId === id ? 'row-drop-target' : '']
+          .filter(Boolean)
+          .join(' '),
       };
     },
     [
       clearTimer,
       finish,
-      ids,
       labelOf,
       noun,
+      onDropOn,
       onDropOut,
       onReorder,
+      rowUnder,
       registerRow,
       releaseScrollBlock,
+      rememberClickGuard,
+      resetLive,
+      shifts,
       slotFor,
       state.draggingId,
       state.dy,
-      state.overIndex,
-      state.overOut,
+      state.targetId,
     ],
   );
 
@@ -447,10 +612,42 @@ export function useDragSort({
   }, [onDropOut, state.draggingId, state.overOut]);
 
   return {
-    state: { draggingId: state.draggingId, overIndex: state.overIndex, overOut: state.overOut },
+    state: {
+      draggingId: state.draggingId,
+      overIndex: state.overIndex,
+      overOut: state.overOut,
+      targetId: state.targetId,
+    },
     getRowProps,
     getOutZoneProps,
     dragging: state.draggingId !== null,
     consumeDrag,
+  };
+}
+
+/**
+ * One drop target serving more than one list.
+ *
+ * A folder screen shows two lists at once — its subfolders and its links — and
+ * each has its own hook. Rendering a "move out" bar per list put two identical
+ * targets on screen, both claiming to do the same thing while only the one
+ * belonging to the list being dragged actually answered. Merging them gives the
+ * screen a single target: either hook may drop on it, and it lights up while
+ * either drag is over it.
+ *
+ * Returns `null` when no list offered a target, so a caller cannot end up with an
+ * inert hit area.
+ */
+export function mergeOutZones(
+  ...zones: ReadonlyArray<DragOutZoneProps | null>
+): DragOutZoneProps | null {
+  const present = zones.filter((zone): zone is DragOutZoneProps => zone !== null);
+  if (present.length === 0) return null;
+  return {
+    ref: (element) => {
+      for (const zone of present) zone.ref(element);
+    },
+    'data-drop-out': true,
+    'data-drop-out-active': present.some((zone) => zone['data-drop-out-active']),
   };
 }

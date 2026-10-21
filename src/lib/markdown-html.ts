@@ -29,7 +29,14 @@
  * into a note by surviving a round trip.
  */
 
-import { parseMarkdown, renderInline, type HeadingLevel, type MarkdownBlock } from './markdown';
+import {
+  parseMarkdown,
+  renderInline,
+  type HeadingLevel,
+  type InlineNode,
+  type MarkdownBlock,
+  type MarkdownListItem,
+} from './markdown';
 
 // ---------------------------------------------------------------------------
 // Markdown -> HTML
@@ -48,19 +55,30 @@ export function escapeHtml(value: string): string {
 
 /** Inline spans, as HTML. Bold, italic, strike, code and links. */
 export function inlineToHtml(text: string): string {
-  return renderInline(text)
+  return inlineNodesToHtml(renderInline(text));
+}
+
+/**
+ * Inline nodes as HTML, recursively.
+ *
+ * Nesting has to be rendered as nesting: `<strong><em>x</em></strong>` is what
+ * bold-and-italic looks like, and flattening it to "bold" would quietly drop half
+ * of what the user applied.
+ */
+function inlineNodesToHtml(nodes: readonly InlineNode[]): string {
+  return nodes
     .map((node) => {
       switch (node.type) {
         case 'bold':
-          return `<strong>${escapeHtml(node.value)}</strong>`;
+          return `<strong>${inlineNodesToHtml(node.children ?? [{ type: 'text', value: node.value }])}</strong>`;
         case 'italic':
-          return `<em>${escapeHtml(node.value)}</em>`;
+          return `<em>${inlineNodesToHtml(node.children ?? [{ type: 'text', value: node.value }])}</em>`;
         case 'strike':
-          return `<del>${escapeHtml(node.value)}</del>`;
+          return `<del>${inlineNodesToHtml(node.children ?? [{ type: 'text', value: node.value }])}</del>`;
         case 'code':
           return `<code>${escapeHtml(node.value)}</code>`;
         case 'link':
-          return `<a href="${escapeHtml(node.href)}">${escapeHtml(node.value)}</a>`;
+          return `<a href="${escapeHtml(node.href)}">${inlineNodesToHtml(node.children ?? [{ type: 'text', value: node.value }])}</a>`;
         case 'text':
         default:
           return escapeHtml(node.value);
@@ -80,25 +98,55 @@ export function inlineToHtml(text: string): string {
 export function markdownToHtml(source: string): string {
   const blocks = parseMarkdown(source);
   const html: string[] = [];
-  let inList = false;
+  /** Which list tag is currently open, so a change of kind closes it first. */
+  let openList: 'ul' | 'ol' | null = null;
 
   const closeList = () => {
-    if (inList) {
-      html.push('</ul>');
-      inList = false;
-    }
+    if (!openList) return;
+    html.push(`</${openList}>`);
+    openList = null;
   };
 
   for (const block of blocks) {
-    if (block.kind !== 'list') closeList();
-    html.push(blockToHtml(block, () => inList, () => (inList = true)));
+    if (block.kind !== 'list') {
+      closeList();
+      html.push(blockToHtml(block));
+      continue;
+    }
+
+    /*
+     * An ordered list is an `<ol>`.
+     *
+     * Every list used to be emitted as `<ul>`, so a numbered note came back as
+     * bullets the moment it was reopened — the number survived in the Markdown
+     * and was thrown away by the editor's own renderer. The parser knew; only
+     * this function did not.
+     */
+    const tag = block.ordered ? 'ol' : 'ul';
+    if (openList !== tag) {
+      closeList();
+      openList = tag;
+      const start = block.ordered && block.start !== 1 ? ` start="${block.start}"` : '';
+      html.push(`<${tag}${start}>`);
+    }
+    html.push(listItemsToHtml(block.items));
   }
   closeList();
 
   return html.join('');
 }
 
-function blockToHtml(block: MarkdownBlock, isOpen: () => boolean, open: () => void): string {
+function listItemsToHtml(items: readonly MarkdownListItem[]): string {
+  return items
+    .map((item) => {
+      const indent = item.indent > 0 ? ` data-indent="${Math.min(item.indent, 4)}"` : '';
+      const checkbox = item.checked === null ? '' : ` data-checkbox="${item.checked ? 'x' : ' '}"`;
+      return `<li${indent}${checkbox}>${inlineToHtml(item.text)}</li>`;
+    })
+    .join('');
+}
+
+function blockToHtml(block: MarkdownBlock): string {
   switch (block.kind) {
     case 'heading': {
       const level = Math.min(3, Math.max(1, block.level)) as HeadingLevel;
@@ -117,18 +165,9 @@ function blockToHtml(block: MarkdownBlock, isOpen: () => boolean, open: () => vo
     case 'code':
       return `<pre><code data-language="${escapeHtml(block.language)}">${escapeHtml(block.code)}</code></pre>`;
 
-    case 'list': {
-      const items = block.items.map((item) => {
-        const indent = item.indent > 0 ? ` data-indent="${Math.min(item.indent, 4)}"` : '';
-        const checkbox = item.checked === null ? '' : ` data-checkbox="${item.checked ? 'x' : ' '}"`;
-        return `<li${indent}${checkbox}>${inlineToHtml(item.text)}</li>`;
-      });
-      // A checklist and an ordinary bullet are both `<ul>`: the difference is on
-      // the item, which is where the markdown says it is.
-      if (isOpen()) return items.join('');
-      open();
-      return `<ul>${items.join('')}`;
-    }
+    case 'list':
+      // Handled by `markdownToHtml`, which owns the open/close pairing.
+      return listItemsToHtml(block.items);
 
     default:
       return '';
@@ -184,23 +223,40 @@ function attr(node: DomNodeLike, name: string): string | null {
   return node.getAttribute?.(name) ?? null;
 }
 
+const STRONG_TAGS = new Set(['B', 'STRONG']);
+const EM_TAGS = new Set(['I', 'EM']);
+
 /** Serialise a node's children, inline context (no block separators). */
 function inlineOf(node: DomNodeLike): string {
-  return childrenOf(node).map(serialiseInline).join('');
+  const parent = tagOf(node);
+  return childrenOf(node)
+    .map((child) => serialiseInline(child, parent))
+    .join('');
 }
 
-function serialiseInline(node: DomNodeLike): string {
+function serialiseInline(node: DomNodeLike, parentTag = ''): string {
   if (node.nodeType === TEXT_NODE) return cleanText(node.textContent ?? '');
 
   switch (tagOf(node)) {
     case 'BR':
       return '\n';
     case 'STRONG':
-    case 'B':
-      return wrap(inlineOf(node), '**');
+    case 'B': {
+      /*
+       * Alternate the delimiter when this bold sits inside italic. `**bold with
+       * *italic* inside**` is valid Markdown but needs a parser that understands
+       * single asterisks inside double ones; `**bold with _italic_ inside**`
+       * needs only the obvious rule. The saved text is still ordinary Markdown,
+       * and it is the shape the reader parses back without ambiguity.
+       */
+      const marker = EM_TAGS.has(parentTag) ? '__' : '**';
+      return wrap(inlineOf(node), marker);
+    }
     case 'EM':
-    case 'I':
-      return wrap(inlineOf(node), '*');
+    case 'I': {
+      const marker = STRONG_TAGS.has(parentTag) ? '_' : '*';
+      return wrap(inlineOf(node), marker);
+    }
     case 'DEL':
     case 'S':
     case 'STRIKE':
@@ -239,8 +295,66 @@ function serialiseInline(node: DomNodeLike): string {
  * makes the stored text readable on its own.
  */
 export function htmlToMarkdown(node: DomNodeLike): string {
-  const blocks = childrenOf(node).flatMap(blockOf).filter((block) => block.trim().length > 0);
+  const blocks = rootBlocks(node).filter((block) => block.trim().length > 0);
   return blocks.join('\n\n');
+}
+
+/**
+ * The editable root's children, as paragraphs and blocks.
+ *
+ * The root is a container like any other, with one difference that matters here:
+ * the caret can step *out* of a formatting wrapper and leave loose text beside it
+ * (`<div><b>Bold</b> plain</div>`), because that is what pressing Bold a second
+ * time does. Walking each child separately made those two nodes two paragraphs, so
+ * turning bold off mid-sentence wrote a blank line into the note and the line came
+ * back broken the next time it was opened.
+ *
+ * So a run of inline nodes that includes loose text is one paragraph. Two
+ * *formatted* runs with nothing between them are kept apart deliberately: their
+ * delimiters would abut (`**a***b*`), and that is ambiguous Markdown — the parser
+ * reads it as one emphasis with stray asterisks in it, which is the asterisk bug
+ * in its stored form. Two paragraphs are a visible, fixable artifact; a string
+ * that parses to the wrong thing is not.
+ */
+function rootBlocks(node: DomNodeLike): string[] {
+  const out: string[] = [];
+  let run: DomNodeLike[] = [];
+
+  const flush = () => {
+    if (run.length === 0) return;
+    const loose = run.some((child) => child.nodeType === TEXT_NODE);
+    if (loose || run.length === 1) {
+      const inline = run.map((child) => serialiseInline(child)).join('').trim();
+      if (inline.length > 0) out.push(inline);
+    } else {
+      for (const child of run) out.push(...blockOf(child));
+    }
+    run = [];
+  };
+
+  for (const child of childrenOf(node)) {
+    const isBlock = child.nodeType !== TEXT_NODE && BLOCK_TAGS.has(tagOf(child));
+    if (isBlock) {
+      flush();
+      out.push(...blockOf(child));
+    } else {
+      run.push(child);
+    }
+  }
+  flush();
+  return out;
+}
+
+/**
+ * A fragment's inline content as Markdown, with no block separation.
+ *
+ * The title is a single line of formatted words, not a document: running it
+ * through `htmlToMarkdown` would turn `**a** b` into two paragraphs, because a
+ * block walker separates every top-level node. This keeps the shape the title
+ * actually has.
+ */
+export function htmlToInlineMarkdown(node: DomNodeLike): string {
+  return inlineOf(node).replace(/\u00a0/g, ' ').trim();
 }
 
 /** One top-level node as one or more Markdown blocks. */
@@ -349,7 +463,7 @@ function containerBlocks(node: DomNodeLike): string[] {
 
   const flush = () => {
     if (run.length === 0) return;
-    const inline = run.map(serialiseInline).join('').trim();
+    const inline = run.map((child) => serialiseInline(child)).join('').trim();
     if (inline.length > 0) out.push(inline);
     run = [];
   };
@@ -415,6 +529,8 @@ export type EditorCommand =
   | 'strike'
   | 'code'
   | 'heading'
+  | 'larger'
+  | 'smaller'
   | 'bulletList'
   | 'orderedList'
   | 'checklist'
@@ -454,6 +570,50 @@ const FORMAT_TAGS: Record<TypingCommand, readonly string[]> = {
 
 /** The invisible caret carrier, as a value rather than as a pattern. */
 const CARET_CARRIER_TEXT = '\u200b';
+
+/** Every tag a formatting button can wrap text in. */
+const FORMATTING_ELEMENTS = new Set(['B', 'STRONG', 'I', 'EM', 'DEL', 'S', 'STRIKE', 'CODE']);
+
+/**
+ * Whether a node holds nothing but the editor's own caret carrier.
+ *
+ * This is the difference between "an empty wrapper the caret is sitting in" and
+ * "a wrapper with words in it", and getting it wrong is visible: a wrapper that
+ * holds one `U+200B` would be re-created as a stray empty `<em>` every time the
+ * caret stepped out of it, which stacks empty tags through a sentence as the user
+ * toggles bold and italic.
+ */
+function isCarrierOnly(node: { textContent?: string | null } | null | undefined): boolean {
+  return (node?.textContent ?? '').replace(CARET_CARRIER, '').trim().length === 0;
+}
+
+/** The editable surface a node lives in, for cleaning up after a command. */
+function editingHostOf(node: Node | null): HTMLElement | null {
+  if (!node) return null;
+  const element = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  return (element?.closest('[contenteditable="true"]') as HTMLElement | null) ?? null;
+}
+
+/**
+ * Drop the carriers left behind by an earlier toggle.
+ *
+ * Pressing Bold arms a wrapper with a carrier in it; pressing Italic next puts a
+ * second wrapper inside the first and the first one's carrier becomes a leftover
+ * that draws an empty tag and confuses the next toggle. Everything except the
+ * wrapper the caret now sits in is removed.
+ */
+function clearStrayCarriers(host: HTMLElement | null, keep: Node | null): void {
+  if (!host) return;
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  const strays: Text[] = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text;
+    if (node === keep) continue;
+    if (keep && keep.nodeType === 1 && (keep as Element).contains(node)) continue;
+    if (isCarrierOnly(node)) strays.push(node);
+  }
+  for (const node of strays) node.remove();
+}
 
 /** What the toolbar needs to know: which formats are on at the caret. */
 export interface FormatState {
@@ -569,18 +729,86 @@ export function toggleTypingStyle(command: TypingCommand): boolean {
      * caret outside it, so the next character typed is plain; rewriting text the
      * user has already written is not what pressing an un-pressed button means.
      */
-    if (active.textContent === CARET_CARRIER_TEXT) {
-      const after = document.createRange();
-      after.setStartAfter(active);
-      after.collapse(true);
+    if (isCarrierOnly(active)) {
+      const parent = active.parentNode;
+      if (!parent) return false;
+      const index = Array.prototype.indexOf.call(parent.childNodes, active);
+      /*
+       * A wrapper inside another wrapper is the bold-and-italic case: turn one
+       * off and the other is still on, so the caret stays *inside* what is left
+       * with a fresh carrier of its own. Stepping outside the whole thing is what
+       * made pressing Italic inside bold look like it switched both off.
+       */
+      const outer =
+        parent.nodeType === 1 && FORMATTING_ELEMENTS.has((parent as Element).tagName)
+          ? (parent as Element)
+          : null;
       active.remove();
+
+      if (outer) {
+        const carrier = document.createTextNode(CARET_CARRIER_TEXT);
+        outer.insertBefore(carrier, outer.childNodes[index] ?? null);
+        const inside = document.createRange();
+        inside.setStart(carrier, 0);
+        inside.collapse(true);
+        placeCaret(inside);
+        return false;
+      }
+
+      const after = document.createRange();
+      after.setStart(parent, Math.min(index, parent.childNodes.length));
+      after.collapse(true);
       placeCaret(after);
       return false;
     }
-    const outside = document.createRange();
-    outside.setStartAfter(active);
-    outside.collapse(true);
-    placeCaret(outside);
+
+    /*
+     * Turning it off *in the middle* of formatted text.
+     *
+     * The old behaviour was to step the caret past the whole run, which means the
+     * next word is typed at the end of the sentence instead of where the user was
+     * looking — and with bold and italic both on, the second press appeared to do
+     * nothing while moving the caret out of the note they were editing.
+     *
+     * So the run is split at the caret and a plain bridge is left between the
+     * halves: what came before stays formatted, the caret does not move on screen,
+     * and the next character typed is plain. Pressing the button again on the
+     * bridge re-arms the format at the same spot.
+     */
+    const live = selection.getRangeAt(0);
+    if (!active.contains(live.startContainer)) {
+      const outside = document.createRange();
+      outside.setStartAfter(active);
+      outside.collapse(true);
+      placeCaret(outside);
+      return false;
+    }
+
+    const parent = active.parentNode;
+    if (!parent) return false;
+
+    const tail = live.cloneRange();
+    tail.setEnd(active, active.childNodes.length);
+    const tailContent = tail.extractContents();
+    const bridge = document.createTextNode(CARET_CARRIER_TEXT);
+    parent.insertBefore(bridge, active.nextSibling);
+    /*
+     * Only words that are actually there get carried back into a second wrapper.
+     * The tail almost always contains the invisible carrier this module put
+     * there, and counting that as content is what produced a stray empty `<em>`
+     * after every toggle — visible as an italic button that would not stay off.
+     */
+    if (!isCarrierOnly(tailContent)) {
+      const rest = active.cloneNode(false) as HTMLElement;
+      rest.appendChild(tailContent);
+      parent.insertBefore(rest, bridge.nextSibling);
+    }
+    if (isCarrierOnly(active)) active.remove();
+
+    const caret = document.createRange();
+    caret.setStart(bridge, 0);
+    caret.collapse(true);
+    placeCaret(caret);
     return false;
   }
 
@@ -595,12 +823,61 @@ export function toggleTypingStyle(command: TypingCommand): boolean {
   const wrapper = document.createElement(TYPING_TAGS[command] ?? 'b');
   const carrier = document.createTextNode(CARET_CARRIER_TEXT);
   wrapper.appendChild(carrier);
+  const host = editingHostOf(range.startContainer);
   range.insertNode(wrapper);
+  // The carriers of formats armed a moment ago are not needed any more: the
+  // caret is in the newest wrapper, and leaving them behind draws empty tags.
+  clearStrayCarriers(host, wrapper);
 
   const inner = document.createRange();
   inner.setStart(carrier, 0);
   inner.collapse(true);
   placeCaret(inner);
+  return true;
+}
+
+/**
+ * Toggle one inline tag around the selection, by hand.
+ *
+ * The title needs this rather than `execCommand('bold')`, and the reason is worth
+ * knowing: the title is set in a semibold font, so the browser's own `bold`
+ * command decides the text is *already* bold and turns it off — producing
+ * `font-weight: normal` on the words the user just highlighted. Manual wrapping
+ * asks only the structural question ("is this already inside a `<b>`?") and emits
+ * the tag the serialiser understands.
+ *
+ * A collapsed caret delegates to {@link toggleTypingStyle}, so pressing Bold on
+ * nothing still arms the format for what is typed next.
+ */
+export function toggleInlineElement(tag: 'b' | 'i' | 'del' | 'code'): boolean {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return false;
+
+  if (selection.isCollapsed) {
+    const command: TypingCommand = tag === 'b' ? 'bold' : tag === 'i' ? 'italic' : tag === 'del' ? 'strike' : 'code';
+    return toggleTypingStyle(command);
+  }
+
+  const range = selection.getRangeAt(0);
+  const active = enclosingTag(range.startContainer, [tag.toUpperCase()]);
+  if (active && active.contains(range.endContainer)) {
+    // Unwrap: the words stay, the tag goes.
+    const parent = active.parentNode;
+    if (!parent) return false;
+    while (active.firstChild) parent.insertBefore(active.firstChild, active);
+    parent.removeChild(active);
+    return false;
+  }
+
+  if (!range.commonAncestorContainer.isConnected) return false;
+  const wrapper = document.createElement(tag);
+  wrapper.appendChild(range.extractContents());
+  range.insertNode(wrapper);
+
+  const around = document.createRange();
+  around.selectNodeContents(wrapper);
+  selection.removeAllRanges();
+  selection.addRange(around);
   return true;
 }
 
@@ -642,9 +919,31 @@ export function runEditorCommand(command: EditorCommand): boolean {
     }
   };
 
+  /**
+   * A list, from whatever kind of block the caret is in.
+   *
+   * `insertOrderedList` inside a heading puts the `<ol>` *inside* the `<h3>` —
+   * which is not a list in a document, it is markup no renderer expects. The
+   * stored note then loses the list entirely, because the serialiser reads an
+   * `<ol>` under a heading as inline content. The heading is demoted to a
+   * paragraph first, so the list replaces it the way it does everywhere else.
+   */
+  const makeList = (name: string) => {
+    const block = currentBlock();
+    const tag = block?.tagName ?? '';
+    if (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'H5' || tag === 'H6' || tag === 'BLOCKQUOTE') {
+      exec('formatBlock', 'P');
+    }
+    return exec(name);
+  };
+
   switch (command) {
     case 'bold':
       return exec('bold');
+    case 'larger':
+      return changeTextSize(1);
+    case 'smaller':
+      return changeTextSize(-1);
     case 'italic':
       return exec('italic');
     case 'strike':
@@ -659,15 +958,61 @@ export function runEditorCommand(command: EditorCommand): boolean {
     case 'heading':
       return exec('formatBlock', 'H2');
     case 'bulletList':
-      return exec('insertUnorderedList');
+      return makeList('insertUnorderedList');
     case 'orderedList':
-      return exec('insertOrderedList');
+      return makeList('insertOrderedList');
     case 'quote':
       return exec('formatBlock', 'BLOCKQUOTE');
     case 'checklist':
       return false;
     default:
       return false;
+  }
+}
+
+/**
+ * The sizes a block can take, smallest to largest.
+ *
+ * A note has no font-size field, and inventing one would mean storing inline
+ * styles the Markdown model cannot hold. Headings *are* the size scale the format
+ * already has — they round-trip through `#`/`##`/`###`, they are what a reader
+ * renders larger, and the toolbar's Heading button is already the middle of it. So
+ * "bigger" and "smaller" walk this ladder, and the text stays portable.
+ */
+const SIZE_LADDER = ['P', 'H3', 'H2'] as const;
+
+/** The block element the caret sits in, or `null` where resizing makes no sense. */
+function currentBlock(): HTMLElement | null {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  let node: Node | null = selection.getRangeAt(0).startContainer;
+  while (node && node.nodeType !== 1) node = node.parentNode;
+  while (node) {
+    const element = node as HTMLElement;
+    if (/^(P|H[1-6]|LI|BLOCKQUOTE|DIV)$/.test(element.tagName)) {
+      // A list item would be replaced by a heading, which is not a size change —
+      // it is a different structure. Leave lists and quotes alone.
+      if (element.tagName === 'LI' || element.tagName === 'BLOCKQUOTE') return null;
+      return element;
+    }
+    node = element.parentNode;
+  }
+  return null;
+}
+
+/** Step the current block one size up or down. */
+export function changeTextSize(direction: -1 | 1): boolean {
+  if (typeof document === 'undefined') return false;
+  const block = currentBlock();
+  if (!block) return false;
+  const index = SIZE_LADDER.indexOf(block.tagName as (typeof SIZE_LADDER)[number]);
+  const current = index >= 0 ? index : 0;
+  const next = Math.max(0, Math.min(SIZE_LADDER.length - 1, current + direction));
+  if (next === current) return false;
+  try {
+    return document.execCommand('formatBlock', false, SIZE_LADDER[next]);
+  } catch {
+    return false;
   }
 }
 

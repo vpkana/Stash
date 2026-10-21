@@ -158,7 +158,13 @@ function TreePickerRow({
         )}
         style={{ paddingLeft: 12 + indent }}
       >
+        {/*
+          The tile's letter is decoration: the row's label is right beside it, so
+          without `aria-hidden` every option is announced as "W Work" — the
+          monogram read out as if it were part of the name.
+        */}
         <span
+          aria-hidden
           className={cn(
             'flex size-8 shrink-0 items-center justify-center rounded-lg',
             selected ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-muted',

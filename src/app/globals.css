@@ -537,32 +537,24 @@
 /*
  * Dragging a row to reorder it.
  *
- * The dragged row follows the pointer (a transform written by the hook) and dims
- * as it lifts, and the *drop position* is shown with the line further down rather
- * than by shuffling the rows underneath. Two different answers to two different
- * questions: "where is the thing I am holding", which has to move, and "where
- * will it land", which has to be exact. Nothing in the flow re-lays-out, so no
- * row heights have to be measured on every move.
+ * Two things move, and they answer two different questions. The dragged row
+ * follows the pointer, staying almost fully opaque and raised on its own layer so
+ * it reads as the thing in your hand. The rows between it and the prospective
+ * slot slide by one row-height, so the list **opens the gap where it will land** —
+ * a preview of the result, not a line drawn beside the row it is about to replace.
  *
- * The line is drawn from the row's own data attribute, so the dragging state and
- * the visual are decided in one place (the hook) and rendered in another (here)
- * without a class name to keep in sync.
- */
-/*
- * A draggable row.
- *
- * The transition is what makes the gesture feel like an object rather than a
- * repaint: opacity eases while the row is dimming as it lifts, and transform
- * eases only on the way *back* — a transform transition while the pointer is
- * driving the row would lag the finger by exactly the transition's duration,
- * which is the whole difference between dragging something and dragging a
- * ghost of it. `data-dragging` cuts that transition out for the duration.
+ * Both transforms are written by the hook. The only rule here is the easing: rows
+ * that are opening the gap ease, the row under the finger never does — a
+ * transform transition while the pointer is driving it would lag by exactly the
+ * transition's duration, which is the difference between dragging something and
+ * dragging a ghost of it. `data-dragging` cuts that transition out for the
+ * duration, and `prefers-reduced-motion` drops the slide entirely.
  */
 .row-drag {
   position: relative;
   transition:
     opacity 140ms ease-out,
-    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 140ms ease-out;
 }
 
@@ -572,13 +564,38 @@
   will-change: transform;
 }
 
+.row-drag[data-drag-preview='up'],
+.row-drag[data-drag-preview='down'] {
+  /* Hinted as well: these are the rows doing the animating. */
+  will-change: transform;
+}
+
+/*
+ * The row a dragged item is hovering, where a drop means "put it inside".
+ *
+ * A tint and an inset ring rather than a shadow: the lifted row already carries
+ * the shadow, and two shadows would read as two lifted things. This is the same
+ * signal the folder list gives when a link is dragged over it, so "the row under
+ * the finger is the destination" means the same thing on every screen.
+ */
+.row-drop-target {
+  border-radius: 0.875rem;
+  background-color: color-mix(in srgb, var(--accent-soft) 75%, transparent);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
 .row-drag-lifted {
-  opacity: 0.55;
+  /*
+   * Nearly opaque rather than faded out. A half-transparent row is hard to read
+   * at the exact moment the user is trying to see where it is going; the shadow
+   * and the slight scale already say it is lifted.
+   */
+  opacity: 0.94;
   border-radius: 0.875rem;
   background-color: var(--surface);
   box-shadow:
     0 1px 0 0 rgb(0 0 0 / 0.04),
-    0 12px 26px -10px rgb(15 18 40 / 0.45);
+    0 14px 30px -10px rgb(15 18 40 / 0.4);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -587,46 +604,57 @@
   }
 }
 
-.row-drag[data-drop-edge='top']::before,
-.row-drag[data-drop-edge='bottom']::after {
-  content: '';
-  position: absolute;
-  inset-inline: 0.75rem;
-  block-size: 2px;
-  border-radius: 1px;
-  background-color: var(--accent);
-}
-
-.row-drag[data-drop-edge='top']::before {
-  inset-block-start: 0;
-}
-
-.row-drag[data-drop-edge='bottom']::after {
-  inset-block-end: 0;
-}
-
 /*
  * The "move out of this directory" target.
  *
- * Quiet at rest — a hairline and a muted glyph, present but not asking for
- * anything — and unmistakable the moment a row is over it, which is the only
- * moment it matters. Colour is the accent because this *is* the action; the
- * border steps up with it so the change reads on a low-contrast display too.
+ * A target, not a button: a dashed edge says "somewhere to put something", where
+ * a solid fill would say "press me". It is only ever visible while a row is being
+ * dragged — at rest it keeps its space so the list does not jump when the lift
+ * begins, but it is fully transparent and ignores the pointer.
+ *
+ * Over the target, the edge becomes solid and the tint deepens, which is the one
+ * moment the bar is doing anything: the change has to read on a low-contrast
+ * display and out of the corner of an eye, under a finger.
+ */
+/*
+ * The drop-out target: a slot, not a button.
+ *
+ * An outline with no fill, so it reads as somewhere to put something down rather
+ * than as a control competing with the rows it sits between. The tint arrives
+ * only while the finger is over it, which is the only moment it is actionable.
  */
 .drop-out-zone {
-  border-color: var(--hairline);
-  background-color: var(--surface-2);
-  color: var(--muted-fg);
+  border: 1px dashed color-mix(in srgb, var(--accent) 32%, transparent);
+  color: color-mix(in srgb, var(--accent) 88%, var(--fg));
   transition:
-    border-color 140ms ease-out,
-    background-color 140ms ease-out,
-    color 140ms ease-out;
+    opacity 140ms ease-out,
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+
+.drop-out-zone[data-drop-out-visible='false'] {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.drop-out-arrow {
+  color: color-mix(in srgb, var(--accent) 70%, transparent);
+  transition:
+    color 120ms ease-out,
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .drop-out-zone[data-drop-out-active='true'] {
-  border-color: var(--accent);
-  background-color: var(--accent-soft);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 85%, transparent);
+  background-color: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+
+.drop-out-zone[data-drop-out-active='true'] .drop-out-arrow {
   color: var(--accent);
+  transform: translateY(-2px);
 }
 
 /*
@@ -641,6 +669,25 @@
 .note-body {
   min-block-size: 12rem;
   overflow-wrap: anywhere;
+}
+
+/*
+ * The note title.
+ *
+ * A one-line rich field that has to look like a heading until it is touched: no
+ * border, no background, the same display type as the title it replaced. The
+ * placeholder is drawn from the attribute because a contentEditable has none of
+ * its own, and `:empty` is the honest test — the node is left truly empty rather
+ * than holding a placeholder character.
+ */
+.note-title {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.note-title:empty::before {
+  content: attr(data-placeholder);
+  color: var(--subtle-fg);
 }
 
 .note-body:empty::before {

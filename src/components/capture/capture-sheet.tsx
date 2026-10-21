@@ -172,6 +172,32 @@ export function CaptureSheet() {
     }
   }, [duplicatePending]);
 
+  /*
+   * Validate on press, not by disabling the button.
+   *
+   * The footer used to be `disabled={!validUrl}`. That looks safe and behaves as
+   * a dead end: an address typed without a scheme — "example.com/article", which
+   * is how most apps *print* links — left both Save buttons greyed out with no
+   * sentence anywhere explaining why. The button now stays pressable and says
+   * what is wrong, which is the only version that can be recovered from.
+   */
+  const submit = React.useCallback(
+    (toInbox: boolean) => {
+      if (status === 'saving') return;
+      if (!validUrl) {
+        setError(
+          (draft?.url.trim() ?? '') === ''
+            ? 'Paste a link to save.'
+            : 'That does not look like a web address. Check it and try again.',
+        );
+        urlInputRef.current?.focus();
+        return;
+      }
+      void (toInbox ? handleSaveToInbox() : handleSave());
+    },
+    [draft?.url, handleSave, handleSaveToInbox, status, validUrl],
+  );
+
   const handleMoveExisting = React.useCallback(
     async (linkId: string) => {
       const destinationAtSave = useCaptureStore.getState().destination;
@@ -366,8 +392,8 @@ export function CaptureSheet() {
                 variant="primary"
                 size="lg"
                 className="w-full"
-                disabled={!validUrl || status === 'saving'}
-                onClick={() => void (inInbox ? handleSaveToInbox() : handleSave())}
+                disabled={status === 'saving'}
+                onClick={() => submit(inInbox)}
               >
                 {status === 'saving' ? (
                   <>
@@ -402,8 +428,8 @@ export function CaptureSheet() {
                   variant="surface"
                   size="lg"
                   className="mt-2 w-full"
-                  disabled={!validUrl || status === 'saving'}
-                  onClick={() => void handleSaveToInbox()}
+                  disabled={status === 'saving'}
+                  onClick={() => submit(true)}
                 >
                   <Inbox size={19} strokeWidth={2} aria-hidden />
                   Save to Inbox

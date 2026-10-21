@@ -5,9 +5,10 @@ import { ChevronRight, FileText, Link2, Lock, MoreHorizontal, NotebookPen, Star 
 import type { Note } from '@/db/types';
 import { checklistProgress } from '@/lib/markdown';
 import { formatRelative, pluralize } from '@/lib/format';
-import { notePlainText } from '@/lib/notes';
+import { notePlainText, noteTitleText } from '@/lib/notes';
 import { useLockState } from '@/lib/privacy/access';
-import { useLongPress } from '@/hooks/use-long-press';
+import type { DragRowProps } from '@/hooks/use-drag-sort';
+import { DragGrip } from '@/components/ui/drag-grip';
 import { useVaultStore } from '@/stores/vault-store';
 import { LockedRow, useRevealLocked } from '@/components/privacy/locked-row';
 import { IdentityTile } from '@/components/ui/identity-tile';
@@ -39,6 +40,10 @@ export interface NoteRowProps {
   onToggleFavorite?: () => void;
   /** Marked because it matched the current query. */
   highlight?: boolean;
+  /** Row props from {@link useDragSort}, when this list is reorderable. */
+  dragRow?: DragRowProps;
+  /** The companion to `dragRow`: true once, for the click that ends a lift. */
+  consumeDrag?: () => boolean;
   className?: string;
 }
 
@@ -51,12 +56,11 @@ export function NoteRow({
   onShowActions,
   onToggleFavorite,
   highlight = false,
+  dragRow,
+  consumeDrag,
   className,
 }: NoteRowProps) {
   const locked = useVaultStore((state) => state.protection.notes.has(note.id));
-  // Hold a note for the same sheet its ⋯ button opens, so every list in the app
-  // answers to the same gesture.
-  const { handlers, consumeLongPress } = useLongPress(onShowActions);
   // See `LockedRow`: a protected note is a placeholder that asks for the prompt.
   // Asked of the central access check rather than of the ciphertext, because
   // "may I read this" and "is this encrypted on disk" are different questions
@@ -81,20 +85,23 @@ export function NoteRow({
         subtitle={formatRelative(note.updatedAt)}
         busy={revealing}
         onReveal={() => void reveal('note', note.id, onOpen)}
+        {...(dragRow ? { dragRow } : {})}
+        {...(consumeDrag ? { consumeDrag } : {})}
         className={className}
       />
     );
   }
 
   return (
-    <div className={cn('flex items-stretch', highlight && 'bg-accent-soft/40', className)}>
+    <div {...dragRow} className={cn('flex items-stretch', highlight && 'bg-accent-soft/40', dragRow?.className, className)}>
+      {/* The handle appears only where the list can actually be reordered. */}
+      {dragRow ? <DragGrip /> : null}
       <button
         type="button"
         onClick={() => {
-          if (consumeLongPress()) return;
+          if (consumeDrag?.()) return;
           onOpen();
         }}
-        {...handlers}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-4 py-3.5 text-left active:bg-surface-2"
       >
         <IdentityTile color={tone}>
@@ -106,7 +113,9 @@ export function NoteRow({
         </IdentityTile>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
-            <span className="text-row min-w-0 truncate font-medium text-fg">{note.title}</span>
+            <span className="text-row min-w-0 truncate font-medium text-fg">
+              {noteTitleText(note.title)}
+            </span>
             {locked ? <Lock size={12} strokeWidth={2.4} className="shrink-0 text-accent" aria-label="Locked note" /> : null}
             {note.isFavorite ? (
               <Star size={12} strokeWidth={2.4} className="shrink-0 fill-warning text-warning" aria-label="Favorite" />
@@ -138,8 +147,9 @@ export function NoteRow({
         {onToggleFavorite ? (
           <button
             type="button"
-            onClick={onToggleFavorite}
-            aria-label={note.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
+          data-no-drag
+          onClick={onToggleFavorite}
+          aria-label={note.isFavorite ? 'Remove from favorites' : 'Add to favorites'}
             aria-pressed={note.isFavorite}
             className="tap flex size-10 items-center justify-center rounded-full active:bg-surface-2"
           >
@@ -153,8 +163,9 @@ export function NoteRow({
         ) : null}
         <button
           type="button"
+          data-no-drag
           onClick={onShowActions}
-          aria-label={`${note.title} actions`}
+          aria-label={`${noteTitleText(note.title)} actions`}
           className="tap flex size-10 items-center justify-center rounded-full text-muted active:bg-surface-2"
         >
           <MoreHorizontal size={19} strokeWidth={2} aria-hidden />

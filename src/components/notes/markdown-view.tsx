@@ -159,6 +159,20 @@ function ChecklistBox({
   );
 }
 
+/**
+ * The text of a formatted span.
+ *
+ * Nested formatting is rendered as nesting: the parser hands back `children` for
+ * `**a *b* c**`, and flattening it here would show the outer weight on text the
+ * user had italicised deliberately — or, worse, the raw markers it was parsed
+ * from.
+ */
+function InlineContent({ node }: { node: InlineNode }) {
+  if (node.type === 'text' || node.type === 'code') return <>{node.value}</>;
+  if (node.children) return <Inline nodes={node.children} />;
+  return <>{node.value}</>;
+}
+
 function Inline({ nodes }: { nodes: readonly InlineNode[] }) {
   return (
     <>
@@ -167,19 +181,19 @@ function Inline({ nodes }: { nodes: readonly InlineNode[] }) {
           case 'bold':
             return (
               <strong key={index} className="font-semibold">
-                {node.value}
+                <InlineContent node={node} />
               </strong>
             );
           case 'italic':
             return (
               <em key={index} className="italic">
-                {node.value}
+                <InlineContent node={node} />
               </em>
             );
           case 'strike':
             return (
               <s key={index} className="text-muted">
-                {node.value}
+                <InlineContent node={node} />
               </s>
             );
           case 'code':

@@ -70,6 +70,8 @@ export interface RichTextEditorProps {
    * reference into navigation instead of a dead link.
    */
   onOpenReference?: (noteId: string) => void;
+  /** The body gained focus — the toolbar targets whichever surface was last used. */
+  onFocus?: () => void;
   ariaLabel?: string;
 }
 
@@ -105,6 +107,7 @@ export function RichTextEditor({
   onReady,
   onFormatStateChange,
   onOpenReference,
+  onFocus,
   ariaLabel = 'Note body',
 }: RichTextEditorProps) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -494,6 +497,7 @@ export function RichTextEditor({
       role="textbox"
       aria-multiline="true"
       aria-label={ariaLabel}
+      data-surface="body"
       aria-readonly={readOnly || undefined}
       tabIndex={readOnly ? -1 : 0}
       contentEditable={!readOnly}
@@ -502,6 +506,7 @@ export function RichTextEditor({
       onInput={onInput}
       onClick={onClick}
       onFocus={() => {
+        onFocus?.();
         // The keyboard has not opened yet, so the resize listener does the work;
         // this only covers the case of a caret at the end of a long note whose
         // viewport never changes afterwards.

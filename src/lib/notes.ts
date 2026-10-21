@@ -51,6 +51,18 @@ export function sanitizeNoteTitle(raw: string): string {
   return raw.replace(/\s+/g, ' ').trim().slice(0, NOTE_TITLE_MAX);
 }
 
+/**
+ * A title as words, for every place that shows it without formatting.
+ *
+ * A title is part of the note and can carry emphasis (`**Design** notes`), which
+ * is stored as Markdown. A list row, a breadcrumb, an aria-label and a search
+ * result all want the words without the markers — showing `**Design** notes` in a
+ * row would be the asterisk bug again, in a place the editor cannot fix.
+ */
+export function noteTitleText(title: string): string {
+  return notePlainText(title, NOTE_TITLE_MAX) || title;
+}
+
 /** Plain-text projection of note content, for search, snippets, and previews. */
 export function notePlainText(content: string, limit = 400): string {
   const flattened = content

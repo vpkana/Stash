@@ -1,4 +1,5 @@
 import type { Folder, FolderDeletionImpact, Note, NoteDeletionImpact, SavedLink } from '@/db/types';
+import { noteTitleText } from './notes';
 
 /**
  * Tree operations, generic over any parent-linked entity.
@@ -449,7 +450,10 @@ export function selfAndAncestorIds(folders: readonly Folder[], folderId: string)
 
 export const noteAccessor: TreeAccessor<Note> = {
   parentOf: (note) => note.parentNoteId,
-  labelOf: (note) => note.title,
+  // Whichever surface reads this — a picker row, a breadcrumb path, the sibling
+  // sort — wants the words of the title, not the Markdown that stores its
+  // emphasis. See `noteTitleText`.
+  labelOf: (note) => noteTitleText(note.title),
 };
 
 export function compareNotes(a: Note, b: Note): number {

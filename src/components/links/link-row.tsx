@@ -7,7 +7,6 @@ import { displayUrl, formatRelative } from '@/lib/format';
 import { linkPrimaryLabel, linkDomain } from '@/lib/link-label';
 import { domainColor } from '@/lib/identity-color';
 import { useLockState } from '@/lib/privacy/access';
-import { useLongPress } from '@/hooks/use-long-press';
 import type { DragRowProps } from '@/hooks/use-drag-sort';
 import { DragGrip } from '@/components/ui/drag-grip';
 import { useVaultStore, selectTagsForLink } from '@/stores/vault-store';
@@ -90,9 +89,6 @@ export function LinkRow({
   // thread them through, so a list added later shows them for free.
   const tags = useVaultStore((state) => selectTagsForLink(state, link.id));
 
-  // Long press is a shortcut to the same sheet the ⋯ button opens, for anyone
-  // who reaches for it; the visible button keeps it discoverable.
-  const { handlers, consumeLongPress } = useLongPress(onShowActions);
   // A protected row is unreadable in this session: it renders as a placeholder
   // that asks for the prompt, and the caller's `onOpen` runs only once the
   // boundary is crossed.
@@ -100,7 +96,6 @@ export function LinkRow({
 
   const handleOpen = () => {
     if (consumeDrag?.()) return;
-    if (consumeLongPress()) return;
     onOpen(link);
   };
 
@@ -154,7 +149,6 @@ export function LinkRow({
       <button
         type="button"
         onClick={handleOpen}
-        {...handlers}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-4 py-3.5 text-left active:bg-surface-2"
       >
         {/*

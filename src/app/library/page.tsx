@@ -25,7 +25,7 @@ import { IdentityTile } from '@/components/ui/identity-tile';
 import { identityColor } from '@/lib/identity-color';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { useDragSort } from '@/hooks/use-drag-sort';
+import { mergeOutZones, useDragSort } from '@/hooks/use-drag-sort';
 
 import { LinkRow } from '@/components/links/link-row';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
@@ -181,6 +181,25 @@ function LibraryView() {
         }
       : {}),
   });
+
+  /*
+   * One way out, even though there are two lists.
+   *
+   * Subfolders and links drag independently, so each hook owns a hit target —
+   * but showing both produced two identical "Move out to …" bars stacked above
+   * the same screen, and only the one belonging to the list in your hand
+   * responded. Merged, the bar is as wide as the screen and answers either drag.
+   */
+  const outZone = mergeOutZones(folderDrag.getOutZoneProps(), linkDrag.getOutZoneProps());
+  /**
+   * The way out is a drop target, so it exists only while a drop is in progress.
+   *
+   * At rest it used to sit above the list saying "Move out to …", which reads as a
+   * button that does nothing until something is dragged — a permanent control for
+   * a gesture nobody is making. It appears with the lift and disappears with the
+   * drop, which is the only moment it can be used.
+   */
+  const dragging = folderDrag.dragging || linkDrag.dragging;
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -520,20 +539,18 @@ function LibraryView() {
         </Section>
       ) : null}
 
+      {/*
+        The way out of this folder, above the lists so a row dragged upward meets
+        it on the way. It names the destination rather than the gesture: "Move out
+        to Development" is a sentence the user can check before they let go.
+        Rendered once for both lists — see `outZone` above.
+      */}
+      {currentId !== null && outZone && (subfolders.length > 0 || directLinks.length > 0) ? (
+        <DropOutZone zoneProps={outZone} label={`Move out to ${parentLabel}`} visible={dragging} />
+      ) : null}
+
       {subfolders.length > 0 ? (
         <Section title={currentId === null ? 'Folders' : 'Subfolders'}>
-          {/*
-            The way out of this folder, above the list so a row dragged upward
-            meets it on the way. It names the destination rather than the gesture:
-            "Move out to Development" is a sentence the user can check before they
-            let go.
-          */}
-          {currentId !== null ? (
-            <DropOutZone
-              zoneProps={folderDrag.getOutZoneProps()}
-              label={`Move out to ${parentLabel}`}
-            />
-          ) : null}
           <ListSurface>
             {subfolders.map((folder, index) => {
               const stats = folderStats.get(folder.id);
@@ -578,7 +595,6 @@ function LibraryView() {
        */}
       {currentId !== null && directLinks.length > 0 ? (
         <Section title={nestedCount > 0 ? 'Links here' : 'Links'}>
-          <DropOutZone zoneProps={linkDrag.getOutZoneProps()} label={`Move out to ${parentLabel}`} />
           <ListSurface>
             {directLinks.map((link, index) => (
               <LinkRow
