@@ -2,8 +2,9 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ChevronRight, FolderPlus, Inbox as InboxIcon, Share2 } from '@/components/ui/icons';
-import type { Folder, SavedLink } from '@/db/types';
+import type { Folder, Note, SavedLink } from '@/db/types';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
 import { useVaultStore, selectInboxLinks } from '@/stores/vault-store';
@@ -11,6 +12,10 @@ import { EmptyState, GroupSurface, ListSurface, PageHeader, PageTitle, Section }
 import { LogoMark } from '@/components/ui/logo';
 import { LinkRow } from '@/components/links/link-row';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
+import { NoteRow } from '@/components/notes/note-row';
+import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
+import { ShareGuide, SHARE_GUIDE_SEEN_KEY } from '@/components/onboarding/share-guide';
+import { getMeta, setMeta } from '@/db/repos/settings';
 
 /**
  * Home is the *recency* surface, not a second Library.
@@ -24,14 +29,19 @@ import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
  * to make this screen look different from the other one.
  */
 export default function HomePage() {
+  const router = useRouter();
   const folders = useVaultStore((state) => state.folders);
   const links = useVaultStore((state) => state.links);
+  const allNotes = useVaultStore((state) => state.visibleNotes);
   const inbox = useVaultStore(selectInboxLinks);
   const hidden = useVaultStore((state) => state.hidden);
   const toggleLinkFavorite = useVaultStore((state) => state.toggleLinkFavorite);
   const markLinkOpened = useVaultStore((state) => state.markLinkOpened);
 
+  const status = useVaultStore((state) => state.status);
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
+  const [activeNote, setActiveNote] = React.useState<Note | null>(null);
+  const [guideOpen, setGuideOpen] = React.useState(false);
 
   /**
    * What just landed, newest first.
@@ -43,11 +53,65 @@ export default function HomePage() {
    * quieter form. The row gives up its address and title (the store redacted
    * them) and keeps everything else.
    */
-  const recent = React.useMemo(
-    () => [...links].sort((a, b) => b.createdAt - a.createdAt).slice(0, 5),
+  const recent = React.useMemo(() => collapseDuplicateLinks([...links].sort((a, b) => b.createdAt - a.createdAt)).slice(0, 5), [links]);
+
+  /**
+   * The two things a user actually wants to see beside "what just landed":
+   * what they marked to keep, and what they wrote. Both are deliberately short
+   * lists — Home is a summary, and every one of these has a screen of its own
+   * one tap away.
+   */
+  const favoriteLinks = React.useMemo(
+    () =>
+      collapseDuplicateLinks(
+        [...links].filter((link) => link.isFavorite).sort((a, b) => b.updatedAt - a.updatedAt),
+      ).slice(0, 4),
     [links],
   );
-  const isEmpty = links.length === 0 && folders.length === 0;
+  const favoriteNotes = React.useMemo(
+    () => [...allNotes].filter((note) => note.isFavorite).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 3),
+    [allNotes],
+  );
+  const recentNotes = React.useMemo(
+    () => [...allNotes].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4),
+    [allNotes],
+  );
+  const noteChildCounts = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const note of allNotes) {
+      if (!note.parentNoteId) continue;
+      counts.set(note.parentNoteId, (counts.get(note.parentNoteId) ?? 0) + 1);
+    }
+    return counts;
+  }, [allNotes]);
+  const openNote = React.useCallback((id: string) => router.push(`/notes?note=${id}`), [router]);
+
+  const closeGuide = React.useCallback(() => {
+    setGuideOpen(false);
+    void setMeta(SHARE_GUIDE_SEEN_KEY, true);
+  }, []);
+  const isEmpty = links.length === 0 && folders.length === 0 && allNotes.length === 0;
+
+  /**
+   * The share guide opens itself once, before the first link is saved.
+   *
+   * "First run" is measured by the absence of links, not by an empty vault: the
+   * first boot seeds a handful of starter folders, so an empty-vault test would
+   * never fire on the install it is meant for. A vault that already has links is
+   * not new, and the guide stays out of its way — the settings row is there for
+   * anyone who dismissed it or is curious later. The flag in `meta` travels with
+   * an export and survives a restart.
+   */
+  React.useEffect(() => {
+    if (status !== 'ready' || links.length > 0) return;
+    let cancelled = false;
+    void getMeta<boolean>(SHARE_GUIDE_SEEN_KEY, false).then((seen) => {
+      if (!cancelled && !seen) setGuideOpen(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, links.length]);
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -125,17 +189,22 @@ export default function HomePage() {
             is the only onboarding there is.
           */}
           <GroupSurface className="mt-2">
-            <div className="flex items-start gap-3 px-4 py-3.5">
+            <button
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              className="tap flex w-full items-start gap-3 px-4 py-3.5 text-left active:bg-surface-2"
+            >
               <span className="tile bg-accent-soft text-accent">
                 <Share2 size={19} strokeWidth={1.9} aria-hidden />
               </span>
-              <div className="min-w-0">
-                <p className="text-row font-medium text-fg">Save a link from any app</p>
-                <p className="text-meta mt-0.5 leading-relaxed text-muted">
+              <span className="min-w-0 flex-1">
+                <span className="text-row block font-medium text-fg">Save a link from any app</span>
+                <span className="text-meta mt-0.5 block leading-relaxed text-muted">
                   Tap Share in the app you are reading in and choose Stash. The link arrives in your Inbox.
-                </p>
-              </div>
-            </div>
+                </span>
+              </span>
+              <ChevronRight size={16} strokeWidth={2} className="mt-1 shrink-0 text-subtle" aria-hidden />
+            </button>
             <div className="flex items-start gap-3 px-4 py-3.5">
               <span className="tile bg-surface-2 text-muted">
                 <FolderPlus size={19} strokeWidth={1.9} aria-hidden />
@@ -169,6 +238,61 @@ export default function HomePage() {
               <p className="text-body px-4 py-4 text-muted">Nothing here yet.</p>
             )}
           </Section>
+
+          {favoriteLinks.length > 0 || favoriteNotes.length > 0 ? (
+            <Section title="Favorites">
+              {/*
+                Everything starred, in one list: a link and a note are different
+                kinds of thing but the same answer to "what did I mean to come
+                back to". Starred folders stay in the Library, where the tree is.
+              */}
+              <ListSurface>
+                {favoriteLinks.map((link) => (
+                  <LinkRow
+                    key={link.id}
+                    link={link}
+                    context={folderNameFor(folders, link.folderId)}
+                    onOpen={openLink}
+                    onToggleFavorite={() => void toggleLinkFavorite(link.id)}
+                    onShowActions={() => setActiveLink(link)}
+                  />
+                ))}
+                {favoriteNotes.map((note) => (
+                  <NoteRow
+                    key={note.id}
+                    note={note}
+                    childCount={noteChildCounts.get(note.id) ?? 0}
+                    onOpen={() => openNote(note.id)}
+                    onShowActions={() => setActiveNote(note)}
+                    onToggleFavorite={() => void useVaultStore.getState().toggleNoteFavorite(note.id)}
+                  />
+                ))}
+              </ListSurface>
+            </Section>
+          ) : null}
+
+          {recentNotes.length > 0 ? (
+            <Section title="Notes" action="All notes" actionHref="/notes">
+              {/*
+                Names, not excerpts. Home is where you recognise something you
+                wrote and go back to it; the writing itself belongs behind the
+                tap, not in a two-line preview that makes every row a different
+                height.
+              */}
+              <ListSurface>
+                {recentNotes.map((note) => (
+                  <NoteRow
+                    key={note.id}
+                    note={note}
+                    childCount={noteChildCounts.get(note.id) ?? 0}
+                    onOpen={() => openNote(note.id)}
+                    onShowActions={() => setActiveNote(note)}
+                    onToggleFavorite={() => void useVaultStore.getState().toggleNoteFavorite(note.id)}
+                  />
+                ))}
+              </ListSurface>
+            </Section>
+          ) : null}
 
           {/*
             Where to go next, as two rows on one card — the only navigation here,
@@ -207,8 +331,37 @@ export default function HomePage() {
         link={activeLink}
         onClose={() => setActiveLink(null)}
       />
+      <NoteActionsSheet
+        key={activeNote?.id ?? 'no-note'}
+        note={activeNote}
+        onClose={() => setActiveNote(null)}
+        onOpenNote={openNote}
+      />
+      <ShareGuide open={guideOpen} onClose={closeGuide} />
     </>
   );
+}
+
+/**
+ * One row per address per folder, keeping the first in the order given.
+ *
+ * Saving the same page twice into the same place is allowed — the capture sheet
+ * warns first, and "save anyway" is a real answer — but two identical rows in a
+ * short list read as a bug rather than as two decisions, because the list is a
+ * summary of what is here, not a log of every write. The caller sorts first and
+ * the newest wins. The same address filed somewhere *else* is a different fact,
+ * and stays where it is.
+ */
+function collapseDuplicateLinks(links: readonly SavedLink[]): SavedLink[] {
+  const seen = new Set<string>();
+  const unique: SavedLink[] = [];
+  for (const link of links) {
+    const key = `${link.folderId ?? 'inbox'}::${(link.normalizedUrl || link.url).trim().toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(link);
+  }
+  return unique;
 }
 
 /** Where a recent link sits, shown as context on a row that is out of place. */

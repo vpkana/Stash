@@ -4,9 +4,11 @@ import * as React from 'react';
 import Link from 'next/link';
 import {
   ChevronRight,
+  Download,
   Inbox,
   Monitor,
   Moon,
+  Share2,
   Shield,
   Sun,
   Trash2,
@@ -16,6 +18,8 @@ import { RotateCcw } from '@/components/ui/icons';
 import { PrivacySettings } from '@/components/privacy/privacy-settings';
 import { ConfirmAuth } from '@/components/privacy/confirm-auth';
 import { ExportPanel } from '@/components/backup/export-panel';
+import { ANDROID_DOWNLOAD_URL, ShareGuide } from '@/components/onboarding/share-guide';
+import { openExternal } from '@/lib/open-external';
 import { ImportFlow } from '@/components/backup/import-flow';
 import { pluralize } from '@/lib/format';
 import { useVaultStore } from '@/stores/vault-store';
@@ -55,6 +59,7 @@ export default function SettingsPage() {
   const setMode = useThemeStore((state) => state.setMode);
 
   const [busy, setBusy] = React.useState(false);
+  const [guideOpen, setGuideOpen] = React.useState(false);
   const [confirmErase, setConfirmErase] = React.useState(false);
   /*
    * Both irreversible entries below are behind a proof of identity before the
@@ -139,6 +144,40 @@ export default function SettingsPage() {
       </Section>
 
       <PrivacySettings />
+
+      <Section title="Saving from other apps">
+        {/*
+          The one part of Stash that lives outside Stash. A settings row can be
+          honest about that: the guide is worth watching once, and the download
+          is for people who want the share sheet and nothing else.
+        */}
+        <div className="mx-4 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setGuideOpen(true)}
+            className="tap flex items-center gap-3 rounded-2xl border border-hairline bg-surface px-4 py-3.5 text-left active:bg-surface-2"
+          >
+            <Share2 size={18} strokeWidth={1.9} className="shrink-0 text-muted" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-row font-medium text-fg">How sharing works</span>
+              <span className="block text-meta text-subtle">The share sheet, step by step — phones only</span>
+            </span>
+            <ChevronRight size={17} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />
+          </button>
+          <button
+            type="button"
+            onClick={() => void openExternal(ANDROID_DOWNLOAD_URL)}
+            className="tap flex items-center gap-3 rounded-2xl border border-hairline bg-surface px-4 py-3.5 text-left active:bg-surface-2"
+          >
+            <Download size={18} strokeWidth={1.9} className="shrink-0 text-muted" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-row font-medium text-fg">Get the Android app</span>
+              <span className="block text-meta text-subtle">Share into Stash from any app</span>
+            </span>
+            <ChevronRight size={17} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />
+          </button>
+        </div>
+      </Section>
 
       <Section title="Your vault">
         <div className="mx-4 overflow-hidden rounded-control border-border bg-surface border">
@@ -292,6 +331,7 @@ export default function SettingsPage() {
       {/* Mounted once for the whole page: the flow is driven by the store, so it
           appears and disappears with the import rather than with a button. */}
       <ImportFlow />
+      <ShareGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
     </>
   );
 }

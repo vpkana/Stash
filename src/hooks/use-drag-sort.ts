@@ -61,6 +61,8 @@ export interface DragSortState {
   overIndex: number | null;
   /** True while the dragged row is over the caller's "move out" zone. */
   overOut: boolean;
+  /** True while the dragged row is over the caller's lock target. */
+  overLock: boolean;
   /**
    * The row the dragged one is hovering *over*, when the list accepts drops onto
    * rows rather than only between them.
@@ -81,6 +83,13 @@ export interface DragOutZoneProps {
   'data-drop-out-active': boolean;
 }
 
+/** Props for a "lock / unlock this item" drop target. */
+export interface DragLockZoneProps {
+  ref: (element: HTMLElement | null) => void;
+  'data-drop-lock': boolean;
+  'data-drop-lock-active': boolean;
+}
+
 /** Props for the draggable row, spread onto the row's own root element. */
 export interface DragRowProps {
   ref: (element: HTMLElement | null) => void;
@@ -93,6 +102,16 @@ export interface DragRowProps {
   'data-dragging': boolean;
   /** True while the dragged item is hovering this row as a destination. */
   'data-drop-target': boolean;
+  /**
+   * This row's id and kind, so a drag in *another* list can find it.
+   *
+   * A link is dropped into a folder, but folders and links are two lists with
+   * two hooks: the link's drag has no geometry for the folder's rows. These two
+   * attributes are the shared vocabulary that lets it hit-test across that gap
+   * without either hook knowing the other exists.
+   */
+  'data-drop-target-id': string;
+  'data-drop-target-kind': string;
   /** Which way this row is sliding to open the drop gap, for CSS and tests. */
   'data-drag-preview': 'up' | 'down' | 'none';
   style: React.CSSProperties;
@@ -128,6 +147,42 @@ export interface UseDragSortOptions {
    * that is about to happen is not a reorder.
    */
   onDropOn?: (id: string, targetId: string) => void;
+  /**
+   * Called when the drag ends over the caller's lock target.
+   *
+   * Only the caller knows whether the item is currently locked, so only the
+   * caller can decide whether this drop locks it or unlocks it; the hook just
+   * reports that the gesture landed there.
+   */
+  onDropLock?: (id: string) => void;
+  /**
+   * How long the finger must rest on a row before it becomes a destination.
+   *
+   * `0` means immediately, which is what notes want: their rows have no reorder
+   * preview to protect, so dragging one onto another is the whole gesture. A
+   * list that also reorders keeps `0` off the table — every row would be a
+   * destination and no drop could ever land between two — so folders and links
+   * use a short hold: move straight away to reorder, rest on a folder to move
+   * into it.
+   */
+  dropDwellMs?: number;
+  /**
+   * A CSS selector for rows in *another* list that this drag may land on.
+   *
+   * Used by a link dragging onto a folder: the folder's rows are rendered by a
+   * different list with its own hook. The selector is matched against the element
+   * under the finger, so any row that carries `data-drop-target-kind` can answer
+   * without being registered here first.
+   */
+  externalTargetSelector?: string;
+  /**
+   * Whether rows *of this list* can be destinations.
+   *
+   * `true` for notes and folders, where the thing under the finger is the same
+   * kind of thing being dragged. `false` for links: a link is never filed into
+   * another link, so only the external selector can make it a drop.
+   */
+  dropOnRows?: boolean;
 }
 
 export interface UseDragSortResult {
@@ -141,6 +196,14 @@ export interface UseDragSortResult {
    * conditionally cannot leave an invisible hit target on screen.
    */
   getOutZoneProps: () => DragOutZoneProps | null;
+  /**
+   * Props for the lock target, or `null` when this list has no lock gesture.
+   *
+   * The same contract as {@link UseDragSortResult.getOutZoneProps}: an inert
+   * object is never returned, so a caller cannot leave an invisible hit target
+   * on screen.
+   */
+  getLockZoneProps: () => DragLockZoneProps | null;
   /** True while a drag is in flight, so the list can soften the surrounding UI. */
   dragging: boolean;
   /**
@@ -169,12 +232,20 @@ interface LiveDrag {
   dy: number;
   overIndex: number | null;
   overOut: boolean;
+  overLock: boolean;
   targetId: string | null;
   /** Height of the dragged row, captured at the lift. */
   height: number;
 }
 
-const IDLE: LiveDrag = { dy: 0, overIndex: null, overOut: false, targetId: null, height: 0 };
+const IDLE: LiveDrag = {
+  dy: 0,
+  overIndex: null,
+  overOut: false,
+  overLock: false,
+  targetId: null,
+  height: 0,
+};
 
 export function useDragSort({
   ids,
@@ -183,11 +254,16 @@ export function useDragSort({
   labelOf,
   onDropOut,
   onDropOn,
+  onDropLock,
+  dropDwellMs = 0,
+  externalTargetSelector,
+  dropOnRows = true,
 }: UseDragSortOptions): UseDragSortResult {
   const [state, setState] = React.useState<DragSortState & { dy: number; height: number }>({
     draggingId: null,
     overIndex: null,
     overOut: false,
+    overLock: false,
     targetId: null,
     dy: 0,
     height: 0,
@@ -196,6 +272,17 @@ export function useDragSort({
   const rows = React.useRef(new Map<string, HTMLElement>());
   /** The caller's "move out" target, when it rendered one. */
   const outZone = React.useRef<HTMLElement | null>(null);
+  /** The caller's lock target, when it rendered one. */
+  const lockZone = React.useRef<HTMLElement | null>(null);
+  /**
+   * The row a resting finger is currently over, and when it got there.
+   *
+   * The dwell is deliberately not state: it changes nothing on screen until it
+   * matures, and a render per pointer move is exactly what this hook avoids. It
+   * is cleared by leaving the row, ending the drag, or dropping the lock target.
+   */
+  const dwell = React.useRef<{ id: string; at: number } | null>(null);
+  const dwellTimer = React.useRef<number | null>(null);
   const orderRef = React.useRef<readonly string[]>(ids);
   /**
    * Geometry captured at the lift.
@@ -264,24 +351,43 @@ export function useDragSort({
     }, CLICK_GUARD_MS);
   }, []);
 
+  /** Abandon any row the finger was resting on without promoting it. */
+  const clearDwell = React.useCallback(() => {
+    dwell.current = null;
+    if (dwellTimer.current !== null) {
+      window.clearTimeout(dwellTimer.current);
+      dwellTimer.current = null;
+    }
+  }, []);
+
   // A row scrolled out of the list (or a screen unmounted) while a press was
   // pending must not leave a timer behind to lift something that is gone.
   React.useEffect(
     () => () => {
       clearTimer();
+      clearDwell();
       releaseScrollBlock();
       if (clickGuard.current !== null) window.clearTimeout(clickGuard.current);
     },
-    [clearTimer, releaseScrollBlock],
+    [clearTimer, clearDwell, releaseScrollBlock],
   );
 
   /** Reset the live drag, leaving the state the renderer reads in sync. */
   const resetLive = React.useCallback(() => {
+    clearDwell();
     live.current = IDLE;
     startBox.current = null;
     layout.current = new Map();
-    setState({ draggingId: null, overIndex: null, overOut: false, targetId: null, dy: 0, height: 0 });
-  }, []);
+    setState({
+      draggingId: null,
+      overIndex: null,
+      overOut: false,
+      overLock: false,
+      targetId: null,
+      dy: 0,
+      height: 0,
+    });
+  }, [clearDwell]);
 
   /** The slot the dragged row's centre at `y` would land in. */
   const slotFor = React.useCallback((id: string, y: number): number => {
@@ -304,6 +410,30 @@ export function useDragSort({
     }
     return null;
   }, []);
+
+  /**
+   * A destination row rendered by another list, found by hit-testing.
+   *
+   * Live DOM rather than the frozen geometry, because there is no frozen geometry
+   * for rows this hook did not lay out. The one thing that must be filtered out is
+   * the lifted row itself: it follows the pointer on top of everything, so the
+   * first element at the finger is always the thing being dragged. Asking for
+   * *all* elements at that point and skipping that subtree leaves the row it is
+   * covering, which is the one the user means.
+   */
+  const externalTargetUnder = React.useCallback(
+    (x: number, y: number, draggedId: string): string | null => {
+      if (!externalTargetSelector) return null;
+      for (const element of document.elementsFromPoint(x, y)) {
+        if (element.closest('[data-dragging="true"]')) continue;
+        const row = element.closest(externalTargetSelector);
+        const targetId = row?.getAttribute('data-drop-target-id');
+        if (targetId && targetId !== draggedId) return targetId;
+      }
+      return null;
+    },
+    [externalTargetSelector],
+  );
 
   const consumeDrag = React.useCallback(() => {
     if (!swallow.current) return false;
@@ -398,8 +528,23 @@ export function useDragSort({
               const own = boxes.get(id) ?? null;
               startBox.current = own;
               const height = own?.height ?? 0;
-              live.current = { dy: 0, overIndex: index, overOut: false, targetId: null, height };
-              setState({ draggingId: id, overIndex: index, overOut: false, targetId: null, dy: 0, height });
+              live.current = {
+                dy: 0,
+                overIndex: index,
+                overOut: false,
+                overLock: false,
+                targetId: null,
+                height,
+              };
+              setState({
+                draggingId: id,
+                overIndex: index,
+                overOut: false,
+                overLock: false,
+                targetId: null,
+                dy: 0,
+                height,
+              });
             },
             grip ? 0 : LONG_PRESS_MS,
           );
@@ -424,6 +569,32 @@ export function useDragSort({
           live.current.dy = dy;
 
           /*
+           * The lock target comes first: it is a destination in its own right, so
+           * while the row is over it neither the way out nor a list slot is what
+           * the drop will do.
+           */
+          const lockTarget = lockZone.current;
+          let overLock = false;
+          if (lockTarget && onDropLock) {
+            const box = lockTarget.getBoundingClientRect();
+            overLock =
+              event.clientX >= box.left &&
+              event.clientX <= box.right &&
+              event.clientY >= box.top &&
+              event.clientY <= box.bottom;
+          }
+          if (overLock) {
+            clearDwell();
+            live.current = { ...live.current, overIndex: null, overOut: false, overLock: true, targetId: null };
+            setState((current) =>
+              current.draggingId === id
+                ? { ...current, dy, overIndex: null, overOut: false, overLock: true, targetId: null }
+                : current,
+            );
+            return;
+          }
+
+          /*
            * Over the "move out" zone the row is not being reordered at all, so the
            * preview is cleared rather than left pointing at a slot the drop will
            * not use.
@@ -439,12 +610,14 @@ export function useDragSort({
               event.clientY <= box.bottom;
           }
           if (overOut) {
+            clearDwell();
             live.current.overIndex = null;
             live.current.overOut = true;
+            live.current.overLock = false;
             live.current.targetId = null;
             setState((current) =>
               current.draggingId === id
-                ? { ...current, dy, overIndex: null, overOut: true, targetId: null }
+                ? { ...current, dy, overIndex: null, overOut: true, overLock: false, targetId: null }
                 : current,
             );
             return;
@@ -456,17 +629,67 @@ export function useDragSort({
            * the row being dragged is carrying a transform, and hit-testing a
            * moving element would make the target flicker as it follows the
            * pointer.
+           *
+           * With a dwell, a row only becomes a destination once the finger has
+           * rested on it: a list that reorders has to keep every pixel of a row
+           * usable for "put it here", and it can only do that if "put it inside"
+           * is a slower, deliberate version of the same gesture.
            */
           if (onDropOn) {
-            const target = rowUnder(event.clientY, id);
+            const target =
+              (dropOnRows ? rowUnder(event.clientY, id) : null) ??
+              externalTargetUnder(event.clientX, event.clientY, id);
             if (target) {
-              live.current = { ...live.current, dy, overIndex: null, overOut: false, targetId: target };
-              setState((current) =>
-                current.draggingId === id
-                  ? { ...current, dy, overIndex: null, overOut: false, targetId: target }
-                  : current,
-              );
-              return;
+              const promoted = live.current.targetId === target;
+              const resting = dwell.current?.id === target;
+              const matured =
+                resting && dwell.current !== null && Date.now() - dwell.current.at >= dropDwellMs;
+
+              if (promoted || matured || dropDwellMs <= 0) {
+                clearDwell();
+                live.current = {
+                  ...live.current,
+                  dy,
+                  overIndex: null,
+                  overOut: false,
+                  overLock: false,
+                  targetId: target,
+                };
+                setState((current) =>
+                  current.draggingId === id
+                    ? { ...current, dy, overIndex: null, overOut: false, overLock: false, targetId: target }
+                    : current,
+                );
+                return;
+              }
+
+              /*
+               * Start (or keep) the wait. The reorder preview is deliberately left
+               * running underneath it, so a quick drag still looks and behaves
+               * exactly like a reorder.
+               */
+              if (!resting) {
+                clearDwell();
+                dwell.current = { id: target, at: Date.now() };
+                dwellTimer.current = window.setTimeout(() => {
+                  dwellTimer.current = null;
+                  if (active.current !== id || dwell.current?.id !== target) return;
+                  live.current = {
+                    ...live.current,
+                    overIndex: null,
+                    overOut: false,
+                    overLock: false,
+                    targetId: target,
+                  };
+                  setState((current) =>
+                    current.draggingId === id
+                      ? { ...current, overIndex: null, overOut: false, overLock: false, targetId: target }
+                      : current,
+                  );
+                }, dropDwellMs);
+              }
+            } else {
+              clearDwell();
             }
           }
 
@@ -478,12 +701,10 @@ export function useDragSort({
           const box = startBox.current;
           const centre = box ? box.top + box.height / 2 + dy : event.clientY;
           const overIndex = slotFor(id, centre);
-          live.current.overIndex = overIndex;
-          live.current.overOut = false;
-          live.current.targetId = null;
+          live.current = { ...live.current, overIndex, overOut: false, overLock: false, targetId: null };
           setState((current) =>
             current.draggingId === id
-              ? { ...current, dy, overIndex, overOut: false, targetId: null }
+              ? { ...current, dy, overIndex, overOut: false, overLock: false, targetId: null }
               : current,
           );
         },
@@ -505,6 +726,13 @@ export function useDragSort({
            * item leaves this list, so there is no new order to write. Read from
            * the live ref, because this can run before React commits the last move.
            */
+          if (live.current.overLock && onDropLock) {
+            resetLive();
+            rememberClickGuard();
+            onDropLock(id);
+            return;
+          }
+
           if (live.current.overOut && onDropOut) {
             resetLive();
             rememberClickGuard();
@@ -568,6 +796,8 @@ export function useDragSort({
           : `Reorderable ${noun}`,
         'data-dragging': isDragged,
         'data-drop-target': state.targetId === id,
+        'data-drop-target-id': id,
+        'data-drop-target-kind': noun,
         'data-drag-preview': shift < 0 ? 'up' : shift > 0 ? 'down' : 'none',
         style: isDragged
           ? { transform: `translate3d(0, ${state.dy}px, 0) scale(1.02)`, zIndex: 6 }
@@ -580,10 +810,15 @@ export function useDragSort({
       };
     },
     [
+      clearDwell,
       clearTimer,
+      dropDwellMs,
+      dropOnRows,
+      externalTargetUnder,
       finish,
       labelOf,
       noun,
+      onDropLock,
       onDropOn,
       onDropOut,
       onReorder,
@@ -611,15 +846,28 @@ export function useDragSort({
     };
   }, [onDropOut, state.draggingId, state.overOut]);
 
+  const getLockZoneProps = React.useCallback((): DragLockZoneProps | null => {
+    if (!onDropLock) return null;
+    return {
+      ref: (element: HTMLElement | null) => {
+        lockZone.current = element;
+      },
+      'data-drop-lock': true,
+      'data-drop-lock-active': state.draggingId !== null && state.overLock,
+    };
+  }, [onDropLock, state.draggingId, state.overLock]);
+
   return {
     state: {
       draggingId: state.draggingId,
       overIndex: state.overIndex,
       overOut: state.overOut,
+      overLock: state.overLock,
       targetId: state.targetId,
     },
     getRowProps,
     getOutZoneProps,
+    getLockZoneProps,
     dragging: state.draggingId !== null,
     consumeDrag,
   };

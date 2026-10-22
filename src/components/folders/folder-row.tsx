@@ -75,6 +75,13 @@ export interface FolderRowProps {
    * attribute in the DOM.
    */
   consumeDrag?: () => boolean;
+  /**
+   * Lit as a destination while something else is dragged onto it.
+   *
+   * Needed because the drag may belong to another list — a link being moved into
+   * a folder is dragged by the links' hook, which cannot touch this row's class.
+   */
+  dropTarget?: boolean;
   className?: string;
 }
 
@@ -88,6 +95,7 @@ export function FolderRow({
   onToggleFavorite,
   dragRow,
   consumeDrag,
+  dropTarget = false,
   className,
 }: FolderRowProps) {
   // Two different questions, and they are deliberately separate:
@@ -132,7 +140,7 @@ export function FolderRow({
   return (
     <div
       {...dragRow}
-      className={cn('flex items-stretch', dragRow?.className, className)}
+      className={cn('flex items-stretch', dragRow?.className, dropTarget && 'row-drop-target', className)}
     >
       {/* The handle appears only where the list can actually be reordered. */}
       {dragRow ? <DragGrip /> : null}

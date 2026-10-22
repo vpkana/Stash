@@ -1,0 +1,27 @@
+▲ Next.js 16.3.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://10.189.142.75:3000
+✓ Ready in 4.4s
+✓ Running next.config.ts took 323ms
+
+○ Compiling / ...
+ GET / 200 in 4.3s (next.js: 4.0s, application-code: 310ms)
+ GET / 200 in 62ms (next.js: 28ms, application-code: 35ms)
+✓ Compiled in 212ms
+ GET / 200 in 42ms (next.js: 15ms, application-code: 26ms)
+ GET / 200 in 72ms (next.js: 8ms, application-code: 64ms)
+ GET /library/ 200 in 72ms (next.js: 26ms, application-code: 46ms)
+ GET /library/ 200 in 35ms (next.js: 12ms, application-code: 23ms)
+✓ Compiled in 138ms
+ GET /library/ 200 in 37ms (next.js: 13ms, application-code: 24ms)
+✓ Compiled in 153ms
+ GET / 200 in 38ms (next.js: 8ms, application-code: 30ms)
+✓ Compiled in 164ms
+ GET / 200 in 46ms (next.js: 15ms, application-code: 31ms)
+✓ Compiled in 147ms
+ GET / 200 in 39ms (next.js: 16ms, application-code: 23ms)
+ GET /settings/ 200 in 83ms (next.js: 35ms, application-code: 48ms)
+ GET /settings/ 200 in 38ms (next.js: 9ms, application-code: 28ms)
+ GET /settings/ 200 in 30ms (next.js: 7ms, application-code: 23ms)
+ GET /settings/ 200 in 35ms (next.js: 10ms, application-code: 25ms)
+ GET /library/?folder=90c2d10a-d547-443d-9ee7-cfb82ede08e3 200 in 42ms (next.js: 12ms, application-code: 30ms)

@@ -8,16 +8,18 @@ import type { Folder, Note, SavedLink } from '@/db/types';
 import { breadcrumbOf, childrenOf, descendantIdsOf, folderPathLabel, orderedLinks } from '@/lib/tree';
 import { pluralize } from '@/lib/format';
 import { openExternal } from '@/lib/open-external';
-import { useFolderAccess } from '@/lib/privacy/access';
+import { requireAccess, requireFolderAccess, useFolderAccess } from '@/lib/privacy/access';
 import {
   useVaultStore,
   selectFavoriteFolders,
   selectFavoriteNotes,
   selectTagUsage,
 } from '@/stores/vault-store';
+import { usePrivacyStore } from '@/stores/privacy-store';
 import { Button } from '@/components/ui/button';
 import { EmptyState, ListSurface, PageHeader, Section } from '@/components/ui/page';
 import { DropOutZone } from '@/components/ui/drop-out-zone';
+import { DropLockZone } from '@/components/ui/drop-lock-zone';
 import { InlineTitle } from '@/components/folders/inline-title';
 import { linkPrimaryLabel } from '@/lib/link-label';
 import { Icon, isIconName } from '@/components/ui/icon';
@@ -104,6 +106,15 @@ function LibraryView() {
     ids: subfolders.map((folder) => folder.id),
     noun: 'folder',
     labelOf: (id) => folders.find((folder) => folder.id === id)?.name ?? 'folder',
+    /*
+     * Resting on a folder turns it into a destination. A quick drag is still a
+     * reorder — the gap opens and the row drops into it — and only the hold says
+     * "inside this one", which is the distinction the two gestures need to share
+     * one finger.
+     */
+    dropDwellMs: DROP_DWELL_MS,
+    onDropOn: (id, targetId) => void moveIntoFolder(id, targetId, 'folder'),
+    onDropLock: (id) => void lockDropped('folder', id),
     onReorder: (next) => {
       void useVaultStore
         .getState()
@@ -164,6 +175,14 @@ function LibraryView() {
       const link = directLinks.find((candidate) => candidate.id === id);
       return link ? linkPrimaryLabel(link).text : 'link';
     },
+    dropDwellMs: DROP_DWELL_MS,
+    // A link is filed into a folder — never into another link — so its drop
+    // targets are the folder rows rendered by the other list. See
+    // `externalTargetSelector`.
+    dropOnRows: false,
+    externalTargetSelector: '[data-drop-target-kind="folder"]',
+    onDropOn: (id, targetId) => void moveIntoFolder(id, targetId, 'link'),
+    onDropLock: (id) => void lockDropped('link', id),
     onReorder: (next) => {
       void useVaultStore
         .getState()
@@ -200,6 +219,18 @@ function LibraryView() {
    * drop, which is the only moment it can be used.
    */
   const dragging = folderDrag.dragging || linkDrag.dragging;
+
+  /*
+   * The lock target follows the thing in your hand: the same tile means "lock"
+   * for an open folder and "unlock" for a protected one, so there is one place
+   * to drop either, and no second control to read.
+   */
+  const lockZone = folderDrag.dragging ? folderDrag.getLockZoneProps() : linkDrag.getLockZoneProps();
+  const draggedLocked = folderDrag.state.draggingId
+    ? (folders.find((folder) => folder.id === folderDrag.state.draggingId)?.isLocked ?? false)
+    : linkDrag.state.draggingId
+      ? (links.find((link) => link.id === linkDrag.state.draggingId)?.isLocked ?? false)
+      : false;
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -545,8 +576,25 @@ function LibraryView() {
         to Development" is a sentence the user can check before they let go.
         Rendered once for both lists — see `outZone` above.
       */}
-      {currentId !== null && outZone && (subfolders.length > 0 || directLinks.length > 0) ? (
-        <DropOutZone zoneProps={outZone} label={`Move out to ${parentLabel}`} visible={dragging} />
+      {(subfolders.length > 0 || directLinks.length > 0) && (currentId !== null || lockZone) ? (
+        <div className="mx-4 mt-1 flex items-stretch gap-2">
+          {currentId !== null && outZone ? (
+            <DropOutZone
+              zoneProps={outZone}
+              label={`Move out to ${parentLabel}`}
+              visible={dragging}
+              className="mx-0 mt-0 min-w-0 flex-1"
+            />
+          ) : null}
+          {lockZone ? (
+            <DropLockZone
+              zoneProps={lockZone}
+              locked={draggedLocked}
+              visible={dragging}
+              className={currentId === null ? 'ml-auto' : undefined}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       {subfolders.length > 0 ? (
@@ -565,6 +613,10 @@ function LibraryView() {
                   onToggleFavorite={() => void useVaultStore.getState().toggleFolderFavorite(folder.id)}
                   dragRow={folderDrag.getRowProps(folder.id, index)}
                   consumeDrag={folderDrag.consumeDrag}
+                  // Lit while a *link* is resting on it: the destination can be
+                  // rendered by the other list, so its highlight is passed down
+                  // rather than applied by the drag that owns the row.
+                  dropTarget={linkDrag.state.targetId === folder.id}
                 />
               );
             })}
@@ -662,6 +714,89 @@ export default function LibraryPage() {
       <LibraryView />
     </React.Suspense>
   );
+}
+
+/**
+ * How long a finger has to rest on a folder before the drop means "inside it".
+ *
+ * Short enough that a deliberate hold feels like the row noticed, long enough
+ * that a reorder passing over two rows on its way down never triggers one. The
+ * drag itself keeps working throughout: the gap preview is still opening while
+ * the clock runs, which is what makes the hold feel like an addition rather than
+ * a modal state.
+ */
+const DROP_DWELL_MS = 550;
+
+/**
+ * Put a folder or link inside the folder it was dropped on.
+ *
+ * Checked against the destination's lock at the *write*, exactly like every other
+ * route into a protected folder: a destination that stayed shut leaves the item
+ * where it was, rather than filing it somewhere the session cannot read.
+ */
+async function moveIntoFolder(id: string, targetId: string, kind: 'folder' | 'link'): Promise<void> {
+  const vault = useVaultStore.getState();
+  const target = vault.folders.find((folder) => folder.id === targetId);
+  if (!target) return;
+
+  if (!(await requireFolderAccess(targetId))) {
+    toast('That folder stayed locked, so nothing moved.', { tone: 'danger' });
+    return;
+  }
+
+  if (kind === 'folder') {
+    const result = await vault.moveFolder(id, targetId);
+    if (!result.ok) {
+      toast(result.reason, { tone: 'danger' });
+      return;
+    }
+  } else {
+    await vault.moveLink(id, targetId);
+  }
+  toast(`Moved inside “${target.name}”`, { tone: 'success' });
+}
+
+/**
+ * Lock or unlock what was dropped on the lock tile.
+ *
+ * Locking is a decision the user just made with their hand and asks nothing.
+ * Unlocking removes protection from something the session could not read, so it
+ * proves identity first through the same central check every other unlock uses —
+ * passcode or the device prompt — and does nothing when that is refused.
+ */
+async function lockDropped(kind: 'folder' | 'link', id: string): Promise<void> {
+  const vault = useVaultStore.getState();
+  const locked =
+    kind === 'folder'
+      ? (vault.folders.find((folder) => folder.id === id)?.isLocked ?? false)
+      : (vault.links.find((link) => link.id === id)?.isLocked ?? false);
+
+  if (!locked) {
+    /*
+     * Setting the flag is only half of locking: without a keyring there is no
+     * key to seal the content with, and the folder would say "locked" over
+     * plaintext. `ensureLocking` is the same first-use setup the folder's own
+     * Lock row calls, so the gesture cannot create a lock that protects nothing.
+     */
+    const ready = await usePrivacyStore.getState().ensureLocking();
+    if (!ready.ok) {
+      toast(ready.message ?? 'Locking is unavailable on this device', { tone: 'danger' });
+      return;
+    }
+    if (kind === 'folder') await vault.toggleFolderLocked(id, true);
+    else await vault.toggleLinkLocked(id, true);
+    toast(kind === 'folder' ? 'Folder locked' : 'Link locked', { tone: 'success' });
+    return;
+  }
+
+  if (!(await requireAccess(kind, id))) {
+    toast('Stayed locked.', { tone: 'danger' });
+    return;
+  }
+
+  if (kind === 'folder') await vault.toggleFolderLocked(id, false);
+  else await vault.toggleLinkLocked(id, false);
+  toast(kind === 'folder' ? 'Folder unlocked' : 'Link unlocked', { tone: 'success' });
 }
 
 /**

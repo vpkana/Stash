@@ -5,7 +5,7 @@ import { ChevronRight, FileText, Link2, Lock, MoreHorizontal, NotebookPen, Star 
 import type { Note } from '@/db/types';
 import { checklistProgress } from '@/lib/markdown';
 import { formatRelative, pluralize } from '@/lib/format';
-import { notePlainText, noteTitleText } from '@/lib/notes';
+import { noteTitleText } from '@/lib/notes';
 import { useLockState } from '@/lib/privacy/access';
 import type { DragRowProps } from '@/hooks/use-drag-sort';
 import { DragGrip } from '@/components/ui/drag-grip';
@@ -68,7 +68,6 @@ export function NoteRow({
   const access = useLockState('note', note.id);
   const { reveal, busy: revealing } = useRevealLocked();
   const checklist = React.useMemo(() => checklistProgress(note.content), [note.content]);
-  const preview = React.useMemo(() => notePlainText(note.content, 80), [note.content]);
   // Derived from the id, so a note keeps its colour for as long as it exists.
   const tone = identityColor(note.id);
 
@@ -121,10 +120,15 @@ export function NoteRow({
               <Star size={12} strokeWidth={2.4} className="shrink-0 fill-warning text-warning" aria-label="Favorite" />
             ) : null}
           </span>
+          {/*
+            * The name, and what it holds — never a slice of the body.
+            *
+            * A note preview used to be printed here, and it made the list read
+            * like three half-sentences stacked on top of each other: the title of
+            * one note, the opening line of the next, with no rule between them.
+            * The row's job is to be found by name; the words are one tap away.
+            */}
           <span className="text-meta mt-0.5 block truncate text-subtle">{subtitle ?? meta.join(' · ')}</span>
-          {!subtitle && preview.length > 0 && childCount === 0 ? (
-            <span className="text-meta mt-0.5 line-clamp-2 block text-muted">{preview}</span>
-          ) : null}
         </span>
         {childCount > 0 ? (
           <span className="text-meta flex shrink-0 items-center gap-1 text-subtle">
