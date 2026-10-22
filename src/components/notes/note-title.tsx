@@ -4,11 +4,14 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 import {
   activeFormats,
+  caretInsideFormat,
+  formatElementAtCaret,
   htmlToInlineMarkdown,
   inlineToHtml,
   toggleInlineElement,
   type EditorCommand,
   type FormatState,
+  type TypingCommand,
 } from '@/lib/markdown-html';
 
 /**
@@ -60,6 +63,81 @@ export interface NoteTitleApi {
 /** Titles are one line by definition; the storage layer agrees. */
 const MAX_LENGTH = 120;
 
+/** The element each inline format writes. */
+const TYPING_TAG: Record<TypingCommand, 'b' | 'i' | 'del' | 'code'> = {
+  bold: 'b',
+  italic: 'i',
+  strike: 'del',
+  code: 'code',
+};
+
+/**
+ * Insert the first character of an armed format, wrapped, with the caret inside.
+ *
+ * The caret ends up in a text node that is inside the tag, which is what makes
+ * the *rest* of the word land there too — no per-keystroke interception, and
+ * nothing for the browser to normalise away.
+ */
+function insertArmedText(format: TypingCommand, text: string): void {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const wrapper = document.createElement(TYPING_TAG[format]);
+  wrapper.textContent = text;
+  range.deleteContents();
+  range.insertNode(wrapper);
+  const caret = document.createRange();
+  caret.setStart(wrapper.firstChild ?? wrapper, wrapper.firstChild ? text.length : 0);
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+}
+
+/**
+ * Insert the first plain character *outside* the run of formatting it escapes.
+ *
+ * Pressing Bold with the caret inside bold text has to make the next character
+ * plain, and leaving the caret on an empty text node does not do it: the browser
+ * normalises the empty node away and the character lands back inside the run.
+ * Writing real text outside the run gives the caret a home that survives, and
+ * the rest of the word follows it.
+ */
+function insertTextOutsideFormat(format: TypingCommand, text: string): void {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const active = formatElementAtCaret(format);
+  const node = document.createTextNode(text);
+
+  if (!active || !active.contains(range.startContainer) || !active.parentNode) {
+    range.deleteContents();
+    range.insertNode(node);
+  } else {
+    const parent = active.parentNode;
+    // Keep whatever was after the caret formatted: split the run and put the new
+    // plain character between the halves.
+    const tail = document.createRange();
+    tail.setStart(range.startContainer, range.startOffset);
+    tail.setEnd(active, active.childNodes.length);
+    const tailContent = tail.extractContents();
+    const hasTail = (tailContent.textContent ?? '').replace(/\u200b/g, '').trim().length > 0;
+    if (hasTail) {
+      const rest = active.cloneNode(false) as HTMLElement;
+      rest.appendChild(tailContent);
+      parent.insertBefore(node, active.nextSibling);
+      parent.insertBefore(rest, node.nextSibling);
+    } else {
+      parent.insertBefore(node, active.nextSibling);
+    }
+  }
+
+  const caret = document.createRange();
+  caret.setStart(node, text.length);
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+}
+
 export function NoteTitle({
   value,
   onChange,
@@ -74,6 +152,25 @@ export function NoteTitle({
 }: NoteTitleProps) {
   const ref = React.useRef<HTMLDivElement>(null);
   const lastEmitted = React.useRef<string | null>(null);
+  /**
+   * The inline format armed at a collapsed caret, waiting for its first character.
+   *
+   * It has to live here rather than in the document because the title cannot use
+   * the engine's pending format: its face is semibold, so the engine believes the
+   * words are already bold and its command writes `font-weight: normal` instead
+   * of a tag. So the button remembers the intent and the first keystroke writes
+   * its character inside a real element (see `insertArmedText`).
+   */
+  const armed = React.useRef<TypingCommand | null>(null);
+  /**
+   * The format the next character is escaping.
+   *
+   * The other direction of the same idea: the caret is parked inside a run, the
+   * button was pressed to turn it off, and the next keystroke has to be written
+   * *outside* that run — see `insertTextOutsideFormat` for why an empty caret
+   * position cannot express that.
+   */
+  const escaping = React.useRef<TypingCommand | null>(null);
   const onChangeRef = React.useRef(onChange);
   const formatsRef = React.useRef(onFormatStateChange);
   const onReadyRef = React.useRef(onReady);
@@ -104,38 +201,107 @@ export function NoteTitle({
     lastEmitted.current = value;
   }, [value]);
 
+  /**
+   * Publish the button state, including a format that is armed but not yet in
+   * the document. Without this the button would go out the instant it was armed,
+   * because there is nothing in the DOM to find yet.
+   */
+  const publishFormats = React.useCallback(() => {
+    const base = activeFormats();
+    const selection = document.getSelection();
+    const collapsed = selection?.isCollapsed ?? true;
+    const format = armed.current;
+    const escape = escaping.current;
+    if (!collapsed) {
+      formatsRef.current?.(base);
+      return;
+    }
+    // The caret may still be inside the run being left behind; the button has
+    // already been pressed to turn that format off, so it must not stay lit.
+    const next =
+      escape === 'bold'
+        ? { ...base, bold: false }
+        : escape === 'italic'
+          ? { ...base, italic: false }
+          : escape === 'strike'
+            ? { ...base, strike: false }
+            : escape === 'code'
+              ? { ...base, code: false }
+              : base;
+    if (!format) {
+      formatsRef.current?.(next);
+      return;
+    }
+    formatsRef.current?.(
+      format === 'bold'
+        ? { ...next, bold: true }
+        : format === 'italic'
+          ? { ...next, italic: true }
+          : format === 'strike'
+            ? { ...next, strike: true }
+            : { ...next, code: true },
+    );
+  }, []);
+
   const emit = React.useCallback(() => {
     const element = ref.current;
     if (!element) return;
     const markdown = htmlToInlineMarkdown(element).slice(0, MAX_LENGTH);
     lastEmitted.current = markdown;
     onChangeRef.current(markdown);
-    formatsRef.current?.(activeFormats());
-  }, []);
+    publishFormats();
+  }, [publishFormats]);
 
   const api = React.useMemo<NoteTitleApi>(
     () => ({
       run: (command) => {
         const element = ref.current;
         if (!element || readOnly) return;
-        element.focus();
         /*
-         * Inline formats are toggled structurally rather than through
-         * `execCommand('bold')`: the title's own font is semibold, so the engine
-         * decides the text is already bold and turns it *off*, producing
-         * `font-weight: normal` on the words the user just highlighted. A block
-         * command (a list, a heading, a size) has no meaning on a one-line title
-         * and is ignored here.
+         * Inline formats only: a block command (a list, a heading, a size) has no
+         * meaning on a one-line title and is ignored here.
          */
-        if (command === 'bold') toggleInlineElement('b');
-        else if (command === 'italic') toggleInlineElement('i');
-        else if (command === 'strike') toggleInlineElement('del');
-        else if (command === 'code') toggleInlineElement('code');
-        else return;
-        emit();
+        if (command !== 'bold' && command !== 'italic' && command !== 'strike' && command !== 'code') return;
+        element.focus();
+
+        const selection = document.getSelection();
+        const collapsed = selection?.isCollapsed ?? true;
+
+        if (!collapsed) {
+          armed.current = null;
+          escaping.current = null;
+          toggleInlineElement(TYPING_TAG[command]);
+          emit();
+          return;
+        }
+
+        /*
+         * A caret with nothing selected cannot be wrapped, so the format becomes
+         * a *state*: remembered here and applied by the next character typed.
+         */
+        if (escaping.current === command) {
+          // Pressed again while escaping: arm it again, at the same caret.
+          escaping.current = null;
+          armed.current = command;
+          publishFormats();
+          return;
+        }
+
+        if (caretInsideFormat(command)) {
+          // The "off" half. Do not touch the document — the run the caret is in
+          // stays as it is; only the next character is written outside it.
+          armed.current = null;
+          escaping.current = command;
+          publishFormats();
+          return;
+        }
+
+        escaping.current = null;
+        armed.current = armed.current === command ? null : command;
+        publishFormats();
       },
     }),
-    [emit, readOnly],
+    [emit, publishFormats, readOnly],
   );
 
   React.useEffect(() => {
@@ -147,12 +313,16 @@ export function NoteTitle({
     const onSelectionChange = () => {
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0) return;
-      if (!ref.current?.contains(selection.anchorNode)) return;
-      formatsRef.current?.(activeFormats());
+      if (!ref.current?.contains(selection.anchorNode)) {
+        armed.current = null;
+        escaping.current = null;
+        return;
+      }
+      publishFormats();
     };
     document.addEventListener('selectionchange', onSelectionChange);
     return () => document.removeEventListener('selectionchange', onSelectionChange);
-  }, [readOnly]);
+  }, [publishFormats, readOnly]);
 
   return (
     <div
@@ -167,8 +337,37 @@ export function NoteTitle({
       spellCheck
       data-placeholder={placeholder}
       onInput={emit}
+      onBeforeInput={(event) => {
+        /*
+         * The first character after a format is armed: write it inside the
+         * element ourselves, because nothing in the document can tell the
+         * browser about the intent (see `armed`). Every later character is an
+         * ordinary keystroke at a caret that is now inside that element.
+         */
+        const native = event.nativeEvent as InputEvent;
+        if (native.inputType !== 'insertText' || !native.data) return;
+
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, native.data);
+          emit();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        insertArmedText(format, native.data);
+        emit();
+      }}
       onFocus={onFocus}
-      onBlur={onBlur}
+      onBlur={() => {
+        armed.current = null;
+        escaping.current = null;
+        onBlur?.();
+      }}
       onPaste={(event) => {
         // A pasted title is always one line: whatever structure it arrived with,
         // a title cannot hold a paragraph break.
@@ -179,13 +378,47 @@ export function NoteTitle({
       onKeyDown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
+          armed.current = null;
+          escaping.current = null;
           event.currentTarget.blur();
           onEnter?.();
         }
         if (event.key === 'Escape') {
           event.preventDefault();
+          armed.current = null;
+          escaping.current = null;
           event.currentTarget.blur();
+          return;
         }
+
+        /*
+         * The first character of an armed format.
+         *
+         * Done here rather than only in `onBeforeInput` because keydown runs
+         * first and is the one event every engine dispatches for a printable
+         * key; cancelling it stops the plain character from being inserted, and
+         * the wrapped one goes in instead. Composition is left alone — an IME
+         * owns its own text until it commits.
+         */
+        const native = event.nativeEvent;
+        if (native.isComposing || native.ctrlKey || native.metaKey || native.altKey) return;
+        if (event.key.length !== 1) return;
+
+        // Leaving a run: the first plain character is written outside it.
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, event.key);
+          emit();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        insertArmedText(format, event.key);
+        emit();
       }}
       className={cn('note-title min-w-0 flex-1 focus:outline-none', readOnly && 'cursor-default', className)}
     />

@@ -406,7 +406,7 @@ export function NoteEditor({
               onRun={runCommand}
             />
             <Divider />
-            <ToolButton label="Heading" icon={<Heading2 size={17} weight="bold" aria-hidden />} command="heading" onRun={runCommand} />
+            <ToolButton label="Heading" icon={<Heading2 size={17} weight="bold" aria-hidden />} command="heading" onRun={runCommand} active={formats.heading} />
             <ToolButton label="Bulleted list" icon={<List size={17} weight="bold" aria-hidden />} command="bulletList" onRun={runCommand} />
             <ToolButton label="Numbered list" icon={<ListOrdered size={17} weight="bold" aria-hidden />} command="orderedList" onRun={runCommand} />
             <ToolButton label="Checklist" icon={<ListChecks size={17} weight="bold" aria-hidden />} command="checklist" onRun={runCommand} />

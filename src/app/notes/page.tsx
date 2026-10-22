@@ -25,6 +25,9 @@ import { NoteResources } from '@/components/notes/note-resources';
 import { LinkPickerSheet } from '@/components/links/link-picker-sheet';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
 
+/** How long a finger rests on a note before the drop means "make it a subnote". */
+const NOTE_DROP_DWELL_MS = 550;
+
 /**
  * Notes.
  *
@@ -203,6 +206,11 @@ function NotesView() {
     ids: rootNotes.map((note) => note.id),
     noun: 'note',
     labelOf: labelOfNote,
+    // Same timing as the Library: move straight away and the note reorders,
+    // rest on another note and it becomes a subnote of it. Without the hold,
+    // every pixel of a row is a nest target and no note could ever be reordered
+    // by dragging.
+    dropDwellMs: NOTE_DROP_DWELL_MS,
     onReorder: (next) => {
       void useVaultStore
         .getState()
@@ -218,6 +226,7 @@ function NotesView() {
     ids: subnotes.map((note) => note.id),
     noun: 'subnote',
     labelOf: labelOfNote,
+    dropDwellMs: NOTE_DROP_DWELL_MS,
     onReorder: (next) => {
       void useVaultStore
         .getState()
@@ -505,7 +514,7 @@ function NotesView() {
             </ListSurface>
             {subnotes.length > 1 ? (
               <p className="text-meta px-5 pt-2 text-subtle">
-                Drag a row by its handle to reorder it, or onto another note to nest it there.
+                Drag a row by its handle to reorder it, or rest it on another note to nest it there.
               </p>
             ) : null}
           </Section>

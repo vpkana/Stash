@@ -550,7 +550,7 @@ const TYPING_TAGS: Partial<Record<EditorCommand, string>> = {
   code: 'code',
 };
 
-type TypingCommand = 'bold' | 'italic' | 'strike' | 'code';
+export type TypingCommand = 'bold' | 'italic' | 'strike' | 'code';
 
 /**
  * Every tag that *means* one of the typing formats, however it got there.
@@ -621,9 +621,17 @@ export interface FormatState {
   italic: boolean;
   strike: boolean;
   code: boolean;
+  /** True where the caret's block is the heading the button produces. */
+  heading: boolean;
 }
 
-export const NO_FORMATS: FormatState = { bold: false, italic: false, strike: false, code: false };
+export const NO_FORMATS: FormatState = {
+  bold: false,
+  italic: false,
+  strike: false,
+  code: false,
+  heading: false,
+};
 
 /** The nearest ancestor of `node`, itself included, whose tag is in `tags`. */
 function enclosingTag(node: Node | null, tags: readonly string[]): HTMLElement | null {
@@ -678,12 +686,50 @@ export function activeFormats(): FormatState {
   if (!selection || selection.rangeCount === 0) return NO_FORMATS;
   const start = selection.getRangeAt(0).startContainer;
   const inTag = (tags: readonly string[]) => Boolean(enclosingTag(start, tags));
+
+  /*
+   * The title is asked a different question, and it has to be.
+   *
+   * A title is set in a semibold face, so the engine's own "is this bold" test
+   * answers yes about words nobody has ever bolded. A button driven by that
+   * answer is on from the moment the note opens and can never be turned off, no
+   * matter what the document says. So on the title the answer is the document
+   * alone — is this run inside a formatting tag — and anywhere else the engine's
+   * pending state is included, because only it can say what the *next* character
+   * would be.
+   */
+  const structural = editingHostOf(start)?.getAttribute('data-surface') === 'title';
+  const collapsed = selection.isCollapsed;
+  const state = (name: string, tags: readonly string[]) =>
+    structural ? inTag(tags) : commandState(name) || (!collapsed && inTag(tags));
+
   return {
-    bold: inTag(FORMAT_TAGS.bold) || commandState('bold'),
-    italic: inTag(FORMAT_TAGS.italic) || commandState('italic'),
-    strike: inTag(FORMAT_TAGS.strike) || commandState('strikeThrough'),
+    bold: state('bold', FORMAT_TAGS.bold),
+    italic: state('italic', FORMAT_TAGS.italic),
+    strike: state('strikeThrough', FORMAT_TAGS.strike),
     code: inTag(FORMAT_TAGS.code),
+    heading: currentBlock()?.tagName === 'H2',
   };
+}
+
+/**
+ * Whether the caret is already inside one of the typing formats.
+ *
+ * Exported for the title, which arms its own pending format instead of relying on
+ * the engine (see `note-title.tsx`): it has to know when the caret has stepped
+ * into a run that is already formatted, so pressing the button again splits the
+ * run rather than stacking another wrapper.
+ */
+export function caretInsideFormat(command: TypingCommand): boolean {
+  return formatElementAtCaret(command) !== null;
+}
+
+/** The formatting element the caret sits in, if any. */
+export function formatElementAtCaret(command: TypingCommand): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return null;
+  return enclosingTag(selection.getRangeAt(0).startContainer, FORMAT_TAGS[command]);
 }
 
 /**
@@ -903,14 +949,6 @@ export function runEditorCommand(command: EditorCommand): boolean {
     /* not supported: the tag-based output is the default anyway */
   }
 
-  // A collapsed caret has nothing to wrap, so the format is toggled as a state
-  // of the keyboard instead of applied to a range. Checked before the switch so
-  // every typing format behaves the same — and so that pressing the button a
-  // second time turns it off rather than nesting another wrapper.
-  const selection = document.getSelection();
-  const caretOnly = Boolean(selection && selection.rangeCount > 0 && selection.isCollapsed);
-  if (caretOnly && command in TYPING_TAGS) return toggleTypingStyle(command as TypingCommand);
-
   const exec = (name: string, value?: string) => {
     try {
       return document.execCommand(name, false, value);
@@ -918,6 +956,26 @@ export function runEditorCommand(command: EditorCommand): boolean {
       return false;
     }
   };
+
+  /*
+   * A collapsed caret has nothing to wrap, so these three are toggled as a state
+   * of the keyboard instead of applied to a range.
+   *
+   * The state is the engine's own pending format, set by its own command. That
+   * is the only version that survives the next keystroke: an empty wrapper with
+   * a zero-width carrier in it looks right until the first character, at which
+   * point the browser normalises the empty run and the text lands *outside* it —
+   * plain text, while the button stayed lit because the wrapper was still there.
+   * Using `execCommand` makes the button and the typing one decision: press it
+   * again and the engine turns the format off, so the next character is plain.
+   */
+  const selection = document.getSelection();
+  const caretOnly = Boolean(selection && selection.rangeCount > 0 && selection.isCollapsed);
+  if (caretOnly && (command === 'bold' || command === 'italic' || command === 'strike')) {
+    const name = command === 'strike' ? 'strikeThrough' : command;
+    exec(name);
+    return commandState(name);
+  }
 
   /**
    * A list, from whatever kind of block the caret is in.
@@ -949,14 +1007,39 @@ export function runEditorCommand(command: EditorCommand): boolean {
     case 'strike':
       return exec('strikeThrough');
     case 'code': {
-      // There is no inline-code command; `insertHTML` with the selection still in
-      // place wraps it the way `wrapSelection` used to, but visibly.
       const selection = document.getSelection();
-      const text = selection?.toString() ?? '';
-      return exec('insertHTML', `<code>${escapeHtml(text || 'code')}</code>`);
+      if (!selection || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      // Already inline code: the button is a toggle, so this press steps out
+      // (or removes an empty run) instead of nesting another one.
+      if (enclosingTag(range.startContainer, FORMAT_TAGS.code)) {
+        return toggleTypingStyle('code');
+      }
+      if (!range.collapsed) return toggleInlineElement('code');
+      /*
+       * There is no inline-code command, and an empty wrapper cannot hold a
+       * caret across a keystroke. So the chip is inserted with a word in it and
+       * that word is selected: the first character typed replaces it, inside the
+       * element, and the rest follows the caret.
+       */
+      const chip = document.createElement('code');
+      chip.textContent = 'code';
+      range.insertNode(chip);
+      const around = document.createRange();
+      around.selectNodeContents(chip);
+      selection.removeAllRanges();
+      selection.addRange(around);
+      return true;
     }
-    case 'heading':
-      return exec('formatBlock', 'H2');
+    case 'heading': {
+      // A toggle, not an apply: pressing it inside the heading turns the block
+      // back into a paragraph instead of stamping the same heading again.
+      // `currentBlock` is null when the caret is directly in the editable (a
+      // fresh note types into the host until something wraps it), and that is
+      // an apply, not a no-op.
+      const block = currentBlock();
+      return exec('formatBlock', block?.tagName === 'H2' ? 'P' : 'H2');
+    }
     case 'bulletList':
       return makeList('insertUnorderedList');
     case 'orderedList':
@@ -987,8 +1070,12 @@ function currentBlock(): HTMLElement | null {
   if (!selection || selection.rangeCount === 0) return null;
   let node: Node | null = selection.getRangeAt(0).startContainer;
   while (node && node.nodeType !== 1) node = node.parentNode;
+  const host = editingHostOf(node);
   while (node) {
     const element = node as HTMLElement;
+    // Never the editable surface itself: "the block" is the paragraph inside it, 
+    // and `formatBlock` on the host would replace the editor with a heading.
+    if (element === host) return null;
     if (/^(P|H[1-6]|LI|BLOCKQUOTE|DIV)$/.test(element.tagName)) {
       // A list item would be replaced by a heading, which is not a size change —
       // it is a different structure. Leave lists and quotes alone.
