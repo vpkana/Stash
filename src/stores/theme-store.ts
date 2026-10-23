@@ -9,6 +9,7 @@ import {
   type ThemeMode,
 } from '@/db/repos/settings';
 import { DEFAULT_ACCENT, type AccentId } from '@/lib/accent';
+import { syncNativeTheme } from '@/lib/native-theme';
 import { syncSystemBars } from '@/lib/system-bars';
 
 export type { ThemeMode };
@@ -48,6 +49,8 @@ function applyResolved(resolved: ResolvedTheme): void {
   root.style.colorScheme = resolved;
   // Android draws the bars itself, so the theme has to be handed over too.
   syncSystemBars(resolved);
+  // And the rest of the native window — the selection toolbar above all.
+  syncNativeTheme(resolved);
 }
 
 /**

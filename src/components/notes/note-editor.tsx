@@ -431,7 +431,14 @@ export function NoteEditor({
         )}
       </div>
 
-      {/* Space for the fixed formatting bar. */}
+      {/*
+        * Breathing room between the body and whatever the screen lists below
+        * the editor — the Subnotes section and the attached links render after
+        * this component (see `app/notes/page.tsx`). The clearance for the fixed
+        * bar itself lives at the very end of that page, where the bar actually
+        * overlays the content; a spacer here cannot reserve space for
+        * something positioned below content that has not been rendered yet.
+        */}
       <div className="h-16" />
     </div>
   );

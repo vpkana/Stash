@@ -530,8 +530,27 @@ function NotesView() {
           }}
         />
 
-        {/* The editor already reserves room for its own fixed formatting bar. */}
-        <div className="h-4" />
+        {/*
+          * Clearance for the fixed formatting bar, and it has to be the last
+          * thing on the page to be worth anything.
+          *
+          * The bar is `position: fixed` over the bottom of the viewport, so the
+          * only way the end of the content can scroll clear of it is if the
+          * document ends with at least as much empty space as the bar is tall.
+          * This used to be a bare `h-4`, on the theory that the editor's own
+          * internal spacer reserved the room — but the subnotes list and the
+          * attached links render *after* the editor, so the last row of the
+          * screen ended 16px from the bottom and the bar sat on top of it:
+          * the last link or subnote in a long note could not be read or tapped.
+          *
+          * `pb-safe` matches what the bar itself carries (`inset + --chrome-gap`)
+          * and the `h-16` covers the tallest bar content (the link input row);
+          * the two cannot be one element because Tailwind's border-box sizing
+          * would fold the padding into the height instead of adding it.
+          */}
+        <div className="pb-safe">
+          <div className="h-16" />
+        </div>
 
         <NoteActionsSheet
           key={activeNote?.id ?? 'no-note'}
