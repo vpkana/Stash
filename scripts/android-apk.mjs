@@ -20,6 +20,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -27,11 +28,40 @@ const androidDir = path.join(root, 'android');
 const wrapper =
   process.platform === 'win32' ? path.join(androidDir, 'gradlew.bat') : './gradlew';
 
+/*
+ * Gradle derives the OAuth redirect scheme from the Android client id at
+ * manifest-build time, while Next bakes the same id into the JS bundle from
+ * `.env.local`. Reading that one file here keeps the two from drifting and
+ * removes the need to export the variable separately on Windows. Only public
+ * `NEXT_PUBLIC_*` values are read; no client secret belongs in this file or in
+ * the build environment.
+ */
+function localPublicEnv() {
+  const file = path.join(root, '.env.local');
+  if (!fs.existsSync(file)) return {};
+  const values = {};
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = /^\s*(NEXT_PUBLIC_[A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
+    if (!match) continue;
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    values[match[1]] = value;
+  }
+  return values;
+}
+
 const result = spawnSync(wrapper, ['assembleDebug'], {
   cwd: androidDir,
   stdio: 'inherit',
   // `.bat` needs a shell on Windows; the POSIX wrapper is executable on its own.
   shell: process.platform === 'win32',
+  // An explicitly exported value still wins over the local file.
+  env: { ...localPublicEnv(), ...process.env },
 });
 
 if (result.error) {

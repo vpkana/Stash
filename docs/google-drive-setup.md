@@ -46,11 +46,14 @@ user's normal Drive files, and it never asks for `drive`, `drive.readonly` or
 - Application type: **Web application**.
 - **Authorized JavaScript origins** — exact origins, no path, no trailing slash:
   - `http://localhost:3000` for `npm run dev`
-  - every production origin that serves the static build, e.g.
-    `https://stash.example.com`
+  - `https://getstash.web.app` for the Firebase Hosting deployment
+  - any additional production origin that serves the static build
 - No authorized redirect URI is needed: GIS returns the token to the page via its
   own callback and never navigates to a redirect URI.
 - Copy the client id; it is used as `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
+- The downloadable `client_secret_*.json` also contains a client secret. Stash
+  never reads that file, never copies the secret into the repository or bundle,
+  and the GIS token flow does not use it.
 
 The build is a static export (`out/`). The client id is baked in at build time, so
 a hosted copy built without it will report "not configured" no matter what the
@@ -76,6 +79,12 @@ host's runtime environment says.
     client (or replace the fingerprint). A debug-only client makes release
     builds fail with `invalid_client`.
   - If you use Play App Signing, also add the SHA-1 shown in the Play Console.
+- **Advanced settings → Enable custom URI scheme.** New Android clients have this
+  turned off. If it stays off, Google rejects the authorization request with
+  `Custom URI scheme is not enabled for your Android client` before showing
+  consent. The toggle is what allows the system browser to return to Stash. It
+  does not weaken the code exchange: redeeming an authorization code still needs
+  the per-request PKCE verifier, which never leaves the app.
 - No redirect URI is registered. Google's installed-app convention is a reverse
   client id scheme derived in `src/lib/sync/google-config.ts`:
   `com.googleusercontent.apps.<client-prefix>:/oauth2redirect`.
@@ -87,16 +96,37 @@ The Android application may ask for the consent screen even though the app has a
 WebView: authorization happens in the **system browser**, not in the WebView, and
 the redirect returns to the app through the registered scheme.
 
+### Why the IDs are not interchangeable
+
+- **Web** uses the Web-application client with Google Identity Services'
+  `initTokenClient`. GIS requires an authorized JavaScript origin; it returns an
+  access token to the page and never uses the downloaded client secret.
+- **Android** uses the installed/native client with the RFC 8252 authorization-code
+  flow plus PKCE. The redirect is the client's reverse-id custom scheme, and the
+  code exchange is a public-client request with a `code_verifier`.
+- This Android flow does **not** use the web client as a `serverClientId`. That
+  parameter belongs to the Google Sign-In Android SDK's ID-token flow, which Stash
+  does not use. Passing the web client id here would not be correct.
+- Both IDs live in the same Google Cloud project (`getstash-app`), which is what
+  makes the same `appDataFolder` visible from both platforms.
+
 ## 3. Build and run
 
 ### Web
 
-Create `.env.local` in the repository root:
+Create `.env.local` in the repository root (it is git-ignored; only public client
+ids belong in it):
 
 ```dotenv
 NEXT_PUBLIC_GOOGLE_CLIENT_ID=1234567890-xxxxxxxx.apps.googleusercontent.com
 NEXT_PUBLIC_GOOGLE_ANDROID_CLIENT_ID=1234567890-yyyyyyyy.apps.googleusercontent.com
 ```
+
+Do not paste either downloaded `client_secret_*.json` here, and do not commit
+those files. The Android client is an installed/native client and has no secret.
+A single static bundle serves both platforms, so both **public** ids are present
+at build time; the web runtime reads only the web id, and the Android runtime
+reads only the Android id. Neither id is a secret.
 
 Then:
 
@@ -122,10 +152,13 @@ npx cap sync android
 npm run android:apk
 ```
 
-Gradle also accepts `STASH_GOOGLE_ANDROID_CLIENT_ID` or
-`-PgoogleAndroidClientId=...`. If no id is set, the manifest gets a private
-inactive scheme and the app still builds; Connect then reports that Android sync
-is not configured instead of failing at startup. Install the resulting debug APK
+`npm run android:apk` reads `.env.local` itself and passes the public Android id
+to Gradle, so the same file configures both the JS bundle and the manifest
+scheme. Gradle also accepts `STASH_GOOGLE_ANDROID_CLIENT_ID` or
+`-PgoogleAndroidClientId=...`; an explicitly exported value wins over the file.
+If no id is set, the manifest gets a private inactive scheme and the app still
+builds; Connect then reports that Android sync is not configured instead of
+failing at startup. Install the resulting debug APK
 (`android/app/build/outputs/apk/debug/app-debug.apk`).
 
 Requirements: Node 20+, JDK 21 for the Android build, Android SDK (compile SDK as
@@ -173,6 +206,8 @@ The UI shows sanitized states, never a token, note body or client configuration.
 | --- | --- |
 | "not configured in this build" | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (web) or `NEXT_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` (Android) was missing when the bundle was built. Rebuild; runtime env changes do nothing. |
 | "Google rejected this app configuration" (`invalid_client`, `unauthorized_client`) | Wrong client id for the platform, or Android package/SHA-1 does not match the installed APK. |
+| `origin_mismatch` in the Google window | The page origin is not listed under the **Web** client’s Authorized JavaScript origins. Add the exact origin, with scheme and port, e.g. `http://localhost:3000` and `https://getstash.web.app`. |
+| “Access blocked / `invalid_request`: Custom URI scheme is not enabled for your Android client” | The Android client’s custom-scheme redirect is disabled. Edit the Android OAuth client → **Advanced settings** → enable **Custom URI scheme** → Save. Recreate the client if the setting is not offered. |
 | `redirect_uri_mismatch` on Android | Client id used for Gradle differs from the one in the bundle, or the client is not an Android client. Check `NEXT_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` for both steps. |
 | `access_denied` / "cancelled" | The user closed the consent window, or the account is not a test user while the consent screen is in Testing. |
 | `accessNotConfigured` / 403 | Google Drive API not enabled in the project. |
