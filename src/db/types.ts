@@ -321,10 +321,33 @@ export const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
   primaryUnlock: 'device',
 };
 
+/**
+ * A portable wrap of the vault key under a high-entropy recovery key.
+ *
+ * The recovery key is shown once and never stored; only this ciphertext is. It
+ * exists so a second device — or the same device after its platform keystore was
+ * invalidated — can unwrap the vault key without weakening the per-folder device
+ * prompt. It never contains the recovery key itself, and the KDF salt/iteration
+ * count are public parameters.
+ */
+export interface RecoveryWrap {
+  version: 1;
+  /** SHA-256 prefix of the vault key, so a wrong key is a clean refusal. */
+  fingerprint: string;
+  kdf: {
+    algorithm: 'PBKDF2-SHA256';
+    /** Base64 salt. Public by design. */
+    salt: string;
+    iterations: number;
+  };
+  wrappedByRecovery: EncryptedPayload;
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** Wrapped (never raw) key material. Everything here is ciphertext or public. */
 export interface KeyringRecord {
-  version: 1;
-  /**
+  version: 1;  /**
    * Parameters needed to re-derive a passcode's wrapping key.
    *
    * **Legacy only.** A vault set up today is opened by the device lock alone and
@@ -351,6 +374,13 @@ export interface KeyringRecord {
    * exported.
    */
   wrappedByDevice?: EncryptedPayload;
+  /**
+   * Portable wrap under the user's recovery key, created only when they ask for
+   * one. Synced as ciphertext so another device can adopt the vault key. Never a
+   * substitute for the device prompt: it is the key-release step, not access
+   * control.
+   */
+  recovery?: RecoveryWrap;
   createdAt: number;
   updatedAt: number;
 }

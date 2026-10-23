@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AppBoot, BootGate, PrivacySession, ShareListener } from '@/components/providers';
 import { AppShell } from '@/components/app-shell';
+import { SyncRuntime } from '@/components/sync/sync-runtime';
 
 export const metadata: Metadata = {
   title: 'Stash',
@@ -59,6 +60,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <BootGate>
             <PrivacySession />
             <ShareListener />
+            <SyncRuntime />
             <AppShell>{children}</AppShell>
           </BootGate>
         </AppBoot>

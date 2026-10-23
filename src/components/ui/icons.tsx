@@ -23,6 +23,9 @@ import {
   Check as PhCheck,
   CheckCircle as PhCheckCircle,
   CircleNotch as PhCircleNotch,
+  CloudArrowUp as PhCloudArrowUp,
+  CloudCheck as PhCloudCheck,
+  CloudSlash as PhCloudSlash,
   Clock as PhClock,
   Code as PhCode,
   Copy as PhCopy,
@@ -79,6 +82,7 @@ import {
   Shield as PhShield,
   ShieldCheck as PhShieldCheck,
   ShieldWarning as PhShieldWarning,
+  SignOut as PhSignOut,
   Sparkle as PhSparkle,
   Stack as PhStack,
   Star as PhStar,
@@ -244,6 +248,12 @@ export const Upload = icon(PhUploadSimple, 'Upload');
 export const RefreshCw = icon(PhArrowsClockwise, 'RefreshCw');
 export const RotateCcw = icon(PhArrowCounterClockwise, 'RotateCcw');
 export const Wrench = icon(PhWrench, 'Wrench');
+
+// --- Google Drive sync ------------------------------------------------------
+export const CloudArrowUp = icon(PhCloudArrowUp, 'CloudArrowUp');
+export const CloudCheck = icon(PhCloudCheck, 'CloudCheck');
+export const CloudSlash = icon(PhCloudSlash, 'CloudSlash');
+export const SignOut = icon(PhSignOut, 'SignOut');
 
 // --- Personality, used where a folder or a note picks an icon ---------------
 export const Atom = icon(PhAtom, 'Atom');

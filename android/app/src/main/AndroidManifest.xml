@@ -74,6 +74,30 @@
                 <data android:mimeType="text/*" />
             </intent-filter>
 
+            <!--
+                The OAuth redirect back from the system browser.
+
+                `com.googleusercontent.apps.<client-prefix>` is Google's
+                reverse-client-id scheme for installed apps: it proves the
+                redirect comes back to this package's registered client and needs
+                no hosted redirect page. The scheme is a Gradle manifest
+                placeholder because it is derived from the OAuth client id at
+                build time; see `app/build.gradle`.
+
+                It must stay on this activity. `singleTask` turns the redirect
+                into `onNewIntent` on the running app, which is what Capacitor's
+                `appUrlOpen` listener receives while the sign-in promise is
+                waiting. The path (`/oauth2redirect`) is matched in JavaScript
+                rather than declared here, because Android intent filters match
+                custom schemes by scheme alone.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${googleOAuthScheme}" />
+            </intent-filter>
+
         </activity>
 
         <provider

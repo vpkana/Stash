@@ -44,10 +44,13 @@ import { ConfirmAuth } from './confirm-auth';
  * a banking app uses; the difference is scope, because Stash locks a folder
  * rather than gating the whole app.
  *
- * The one cost is stated on this screen rather than implied: the key is bound to
- * this device. A wiped phone or a restore onto a new one leaves the locked items
- * locked, because nothing can unwrap them. Locking is a device property, and
- * pretending otherwise would be selling a recovery that does not exist.
+ * The cost is stated on this screen rather than implied: the device wrap is bound
+ * to this device, so a wiped phone or a restore onto a new one cannot open the
+ * locked items by itself. The way back is the optional recovery key — held only
+ * by the user, published as ciphertext to their own Drive when sync is on — and
+ * it still does not bypass the device prompt. Locking that has neither a recovery
+ * key nor this device is a real dead end, and the screen says that in those
+ * words rather than selling a recovery that does not exist.
  *
  * The single exception is a vault locked by an earlier build with a Stash
  * passcode. Nothing here can create one, but such a vault has to be *converted*
@@ -438,13 +441,21 @@ export function PrivacySettings() {
             <div className="mx-4 rounded-2xl border border-danger/30 bg-danger-soft p-4">
               <p className="flex items-center gap-2 text-row font-semibold text-danger">
                 <AlertTriangle size={17} strokeWidth={2} aria-hidden />
-                The key is bound to this device
+                If this device cannot unlock it
               </p>
               <p className="mt-1.5 text-meta leading-relaxed text-fg/85">
-                There is no reset and no escrow, and no password to fall back on: the key that decrypts a locked
-                item exists only in this device&apos;s secure storage, behind the system prompt. Wipe the phone,
-                lose it, or restore your vault onto a new one, and those items stay unreadable there — everything
+                There is no password to fall back on: the key that decrypts a locked item exists only in this
+                device&apos;s secure storage, behind the system prompt. Wipe the phone, lose it, or restore your
+                vault onto a new one without a recovery key, and those items stay unreadable there — everything
                 else keeps working normally, and nothing is deleted.
+              </p>
+              <p className="mt-2 text-meta leading-relaxed text-fg/85">
+                If you use Google Drive sync, set up a recovery key{' '}
+                <span className="font-medium text-fg">before</span> you need it, in Settings → Google Drive sync.
+                It is shown once, only you hold it, and a copy wrapped by it sits in your own Drive. Stash cannot
+                use it for you and cannot reset it. Entering it installs the vault key on another device — or
+                re-registers the unlock prompt after a Windows Hello reset — and opening a locked folder there
+                still asks for that device&apos;s own prompt.
               </p>
               <p className="mt-2 text-meta leading-relaxed text-fg/85">
                 Removing the lock below destroys that key on purpose. It is the honest choice only when you would

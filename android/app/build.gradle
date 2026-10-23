@@ -1,5 +1,38 @@
 apply plugin: 'com.android.application'
 
+/*
+ * The OAuth redirect scheme is derived from the Android OAuth client id.
+ *
+ * Google issues installed-app clients a "reverse client id" scheme —
+ * `com.googleusercontent.apps.<id-prefix>` — as the redirect URI. That URI has
+ * to match the client exactly, so it is computed here rather than pasted into
+ * the manifest, where it would silently drift from the client id the JS bundle
+ * uses. The JavaScript build reads the same id from
+ * `NEXT_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`; this build accepts an environment
+ * variable of that name, `STASH_GOOGLE_ANDROID_CLIENT_ID`, or
+ * `-PgoogleAndroidClientId=...`.
+ *
+ * When no client id is configured the manifest still needs a non-empty scheme,
+ * so a private, unrelated scheme is used. Sign-in then reports "not configured"
+ * from JavaScript instead of the app failing to build; the scheme is not
+ * registered with Google and can never receive a real redirect.
+ */
+def googleAndroidClientId = System.getenv("NEXT_PUBLIC_GOOGLE_ANDROID_CLIENT_ID")
+if (!googleAndroidClientId) googleAndroidClientId = System.getenv("STASH_GOOGLE_ANDROID_CLIENT_ID")
+if (!googleAndroidClientId && project.hasProperty("googleAndroidClientId")) {
+    googleAndroidClientId = project.property("googleAndroidClientId")
+}
+def googleOAuthScheme = "app.web.stash.oauth.inactive"
+if (googleAndroidClientId) {
+    def clientSuffix = ".apps.googleusercontent.com"
+    if (googleAndroidClientId.endsWith(clientSuffix)) {
+        googleOAuthScheme = "com.googleusercontent.apps." +
+            googleAndroidClientId.substring(0, googleAndroidClientId.length() - clientSuffix.length())
+    } else {
+        logger.warn("Google Android client id does not end with ${clientSuffix}; OAuth redirect is disabled.")
+    }
+}
+
 android {
     namespace = "app.web.Stash"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -10,6 +43,7 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders = [googleOAuthScheme: googleOAuthScheme]
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61

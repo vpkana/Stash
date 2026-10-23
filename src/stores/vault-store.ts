@@ -195,6 +195,15 @@ export interface VaultState {
    */
   trashGroups: TrashEntry[];
   trashLoaded: boolean;
+  /**
+   * Bumped after every successful read-back.
+   *
+   * The vault version is what lets background sync notice a local edit without
+   * every write path having to remember to tell it, and it is deliberately a
+   * counter rather than a timestamp: two edits in the same millisecond are still
+   * two changes.
+   */
+  dataVersion: number;
 
   initialize: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -474,6 +483,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   tagsByLink: new Map(),
   trashGroups: [],
   trashLoaded: false,
+  dataVersion: 0,
 
   initialize: async () => {
     if (get().status === 'ready') return;
@@ -482,7 +492,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       if (!opened) throw new Error('IndexedDB is unavailable on this device.');
       await ensureSeeded();
       const data = await loadEverything();
-      set({ status: 'ready', error: undefined, ...data });
+      set({ status: 'ready', error: undefined, ...data, dataVersion: 1 });
     } catch (error) {
       set({
         status: 'error',
@@ -494,7 +504,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   refresh: async () => {
     try {
       const data = await loadEverything();
-      set({ ...data });
+      set((state) => ({ ...data, dataVersion: state.dataVersion + 1 }));
     } catch (error) {
       console.error('[stash] refresh failed', error);
     }

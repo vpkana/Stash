@@ -11,6 +11,12 @@ import {
   type SecurityRow,
   type Tag,
 } from './types';
+import type {
+  SyncBaseRow,
+  SyncConflictRow,
+  SyncMetaKey,
+  SyncPeerRow,
+} from './sync-types';
 
 export * from './types';
 
@@ -42,6 +48,16 @@ class StashDatabase extends Dexie {
    * path remembering to exclude a key from `meta`.
    */
   security!: Table<SecurityRow, string>;
+
+  /*
+   * Sync bookkeeping. Deliberately part of the same database so that "Erase
+   * vault" removes it atomically, and so no caller can accidentally treat a
+   * checkpoint as vault content.
+   */
+  syncBase!: Table<SyncBaseRow, string>;
+  syncPeers!: Table<SyncPeerRow, string>;
+  syncConflicts!: Table<SyncConflictRow, string>;
+  syncMeta!: Table<{ key: SyncMetaKey; value: unknown }, SyncMetaKey>;
 
   constructor(name = 'stash') {
     super(name);
@@ -249,6 +265,49 @@ class StashDatabase extends Dexie {
             // links and notes this upgrade brought back into view.
             restoredFromArchive: { links: linksRestored, notes: notesRestored },
           },
+        });
+      });
+
+    // ---- Version 7: Google Drive sync bookkeeping -------------------------------
+    // Purely additive, four new tables. No vault row is read, rewritten, dropped
+    // or re-keyed, so an existing vault upgrades without any possibility of data
+    // loss. A vault that never connects sync simply has four empty tables; its
+    // first sync treats every existing row as new and uploads it.
+    //
+    // The split is intentional:
+    //  - `syncBase` is the common ancestor for three-way merge, including
+    //    tombstones. It is the only durable record of a hard deletion, which is
+    //    why tombstones survive retries and can never quietly resurrect.
+    //  - `syncPeers` is how many chunks of each device have been consumed, so a
+    //    sync downloads only new work and a crash never skips a chunk.
+    //  - `syncConflicts` holds disagreements that need a person, including both
+    //    payloads. It is local review material, never uploaded.
+    //  - `syncMeta` is identity, account, counters and the last sanitised error.
+    this.version(7)
+      .stores({
+        folders:
+          'id, parentId, name, sortOrder, updatedAt, deletedAt, [parentId+sortOrder]',
+        links:
+          'id, folderId, normalizedUrl, createdAt, updatedAt, lastOpenedAt, deletedAt, [folderId+createdAt]',
+        tags: 'id, &name',
+        linkTags: '[linkId+tagId], linkId, tagId',
+        notes:
+          'id, parentNoteId, title, sortOrder, createdAt, updatedAt, deletedAt, [parentNoteId+sortOrder]',
+        noteLinks: '[noteId+linkId], noteId, linkId, createdAt',
+        meta: 'key',
+        security: 'key',
+        syncBase: 'key, kind',
+        syncPeers: 'deviceId',
+        syncConflicts: 'id, kind, detectedAt',
+        syncMeta: 'key',
+      })
+      .upgrade(async (transaction) => {
+        const meta = transaction.table<MetaRow, string>('meta');
+        const previous = (await meta.get(META_KEYS.schemaInfo))?.value;
+        const history = previous && typeof previous === 'object' ? previous : {};
+        await meta.put({
+          key: META_KEYS.schemaInfo,
+          value: { ...history, version: 7, migratedAt: Date.now() },
         });
       });
 

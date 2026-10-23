@@ -1,4 +1,4 @@
-import { db, SECURITY_KEYS, type ExportedKeyring, type KeyringRecord } from '@/db';
+import { db, SECURITY_KEYS, type ExportedKeyring, type KeyringRecord, type RecoveryWrap } from '@/db';
 import {
   decryptString,
   encryptString,
@@ -7,6 +7,7 @@ import {
   generateVaultKey,
   importKeyBytes,
   isEncryptedPayload,
+  keyFingerprint,
   randomBytes,
   toBase64,
 } from './crypto';
@@ -35,11 +36,17 @@ import { forgetDeviceCredential, hasDeviceCredential, enrollDeviceCredential } f
  * anywhere in the system. A locked folder opens the way a banking app opens: the
  * system asks, the system verifies, and Stash is told the answer.
  *
- * The one cost of that design is stated plainly wherever locking is offered, and
- * it is not hidden behind a vague sentence: **the key is bound to this device**.
- * A wiped phone or a restore onto a new one means the locked items stay locked,
- * because nothing on earth can unwrap them. Locking is a property of the device,
- * and the app says so rather than implying a recovery that does not exist.
+ * The one cost of that design is stated plainly wherever locking is offered:
+ * **the device wrap is bound to this device**. A wiped phone or a restore onto a
+ * new one cannot open the sealed rows with the device key, because nothing on
+ * earth can unwrap it. That is still true of the device path — and it is why the
+ * keyring can also carry an optional `recovery` wrap: a 160-bit key shown once
+ * to the user, never held by Stash, that wraps the *same* vault key and travels
+ * as ciphertext in the user's own Drive. It is a way to install the vault key on
+ * another device, not a second access gate: after installing it, opening a
+ * locked folder still raises the platform prompt. Without a recovery wrap set up,
+ * locked content genuinely has no way back, and the app says so rather than
+ * implying a recovery that does not exist.
  *
  * ## The legacy passcode wrap, and why it is still readable
  *
@@ -60,6 +67,9 @@ import { forgetDeviceCredential, hasDeviceCredential, enrollDeviceCredential } f
  *  - the **wrapped** vault key: in the `security` table, which is excluded from
  *    export, from import and from the in-memory snapshot by construction.
  *  - the **device key**: platform storage, never exported, meaningless off-device.
+ *  - the **recovery wrap**: ciphertext, optionally published to the user's own
+ *    Google Drive and never accompanied by the recovery key itself. The key is
+ *    shown once at creation and cannot be reconstructed from the wrap.
  */
 
 const DEVICE_KEY_NAME = 'stash.privacy.deviceKey';
@@ -118,7 +128,9 @@ export async function readKeyring(): Promise<KeyringRecord | null> {
   // keep, so it is treated as absent rather than as a broken lock.
   const hasLegacyWrap = Boolean(record.kdf) && isEncryptedPayload(record.wrappedByPasscode);
   const hasDeviceWrap = isEncryptedPayload(record.wrappedByDevice);
-  if (!hasLegacyWrap && !hasDeviceWrap) return null;
+  const hasRecoveryWrap =
+    Boolean(record.recovery) && isEncryptedPayload(record.recovery?.wrappedByRecovery);
+  if (!hasLegacyWrap && !hasDeviceWrap && !hasRecoveryWrap) return null;
   return record as KeyringRecord;
 }
 
@@ -205,8 +217,10 @@ export async function createDeviceKeyring(): Promise<KeySetupResult> {
  * function is the read that follows it. If the device key is gone — app data
  * cleared, restore on a new phone, keystore entry invalidated by a platform
  * update — this returns `null` and the locked items are not readable on this
- * device. Nothing is destroyed by its absence, and the app says which of those
- * two situations it is in rather than showing a dead end.
+ * device by this path. Nothing is destroyed by its absence: if the keyring has a
+ * recovery wrap and the user kept the key, `recovery.ts` can install the vault
+ * key and write a fresh device wrap here. Without one, the app says plainly that
+ * those items cannot be opened here.
  */
 export async function unlockWithDevice(): Promise<CryptoKey | null> {
   const keyring = await readKeyring();
@@ -279,6 +293,10 @@ export async function adoptVaultKeyForDevice(vault: CryptoKey): Promise<KeySetup
   await writeKeyring({
     version: 1,
     wrappedByDevice,
+    // A recovery wrap is portable material, not a device secret. Losing it when
+    // converting a legacy keyring would take away the only way to open the vault
+    // on a second device.
+    ...(keyring.recovery ? { recovery: keyring.recovery } : {}),
     createdAt: keyring.createdAt,
     updatedAt: Date.now(),
   });
@@ -367,6 +385,84 @@ export async function adoptExportedKeyring(exported: ExportedKeyring | undefined
     updatedAt: now,
   });
   return true;
+}
+
+/**
+ * Attach (or replace) a portable recovery wrap on the existing keyring.
+ *
+ * The caller must have proved a device prompt first and must hold the vault key;
+ * this function checks the latter. Replacing a wrap is deliberately allowed once
+ * that is true: rotating a leaked recovery key is a safety action, and the old
+ * wrap stops working the moment the new one is written.
+ */
+export async function writeRecoveryWrap(recovery: RecoveryWrap): Promise<boolean> {
+  const keyring = await readKeyring();
+  if (!keyring) return false;
+  await writeKeyring({ ...keyring, recovery, updatedAt: Date.now() });
+  return true;
+}
+
+/**
+ * Install a vault key recovered from a portable wrap.
+ *
+ * Refuses to replace an existing keyring. Adopting a *different* vault key over
+ * one this device already uses would leave everything sealed under the old key
+ * unreadable, and the user would have no way to tell which rows changed owner.
+ * When the same key is already held, only the recovery wrap is refreshed.
+ */
+export async function installVaultKeyFromRecovery(
+  vault: CryptoKey,
+  recovery: RecoveryWrap,
+  options: { replaceMatching?: boolean } = {},
+): Promise<KeySetupResult> {
+  const existing = await readKeyring();
+  if (existing) {
+    const current = getVaultKey();
+    if (current) {
+      const [oldBytes, newBytes] = await Promise.all([exportKeyBytes(current), exportKeyBytes(vault)]);
+      if (toBase64(oldBytes) !== toBase64(newBytes)) {
+        return {
+          ok: false,
+          message: 'This vault is already using a different key. The recovered key was not installed.',
+        };
+      }
+      await writeKeyring({ ...existing, recovery, updatedAt: Date.now() });
+      vaultKey = current;
+      return { ok: true };
+    }
+    if (options.replaceMatching === true) {
+      const incoming = await keyFingerprint(await exportKeyBytes(vault));
+      if (existing.recovery?.fingerprint !== incoming) {
+        return {
+          ok: false,
+          message: 'That recovery key does not match this device’s vault.',
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        message: 'This device already has a vault key. Unlock it before adding a recovery key.',
+      };
+    }
+  }
+
+  const wrappedByDevice = await wrapForDevice(vault);
+  if (!wrappedByDevice) {
+    return {
+      ok: false,
+      message: 'This device cannot store a key for a device lock, so nothing was changed.',
+    };
+  }
+  const now = Date.now();
+  await writeKeyring({
+    version: 1,
+    wrappedByDevice,
+    recovery,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  });
+  vaultKey = vault;
+  return { ok: true };
 }
 
 /**

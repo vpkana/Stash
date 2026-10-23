@@ -148,6 +148,25 @@ export function newSalt(): Uint8Array {
   return randomBytes(SALT_BYTES);
 }
 
+/**
+ * A public identifier for a vault key: SHA-256 of its raw bytes, truncated.
+ *
+ * Used to name recovery files and to tell "this recovery key opens that vault"
+ * from "it does not" without attempting to decrypt vault content. Being a hash of
+ * a 256-bit random key, it reveals nothing useful about the key.
+ */
+export async function keyFingerprint(bytes: Uint8Array): Promise<string> {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  const digest = await crypto.subtle.digest('SHA-256', copy);
+  const view = new Uint8Array(digest);
+  let hex = '';
+  for (let index = 0; index < 16; index += 1) {
+    hex += (view[index] as number).toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
 /** Structural check, used to tell a sealed row from a legacy plaintext one. */
 export function isEncryptedPayload(value: unknown): value is EncryptedPayload {
   if (!value || typeof value !== 'object') return false;

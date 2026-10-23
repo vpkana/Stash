@@ -566,7 +566,7 @@ describe('schema migration', () => {
       version: number;
       restoredFromArchive: { links: number; notes: number };
     };
-    expect(schemaInfo.version).toBe(6);
+    expect(schemaInfo.version).toBe(7);
     expect(schemaInfo.restoredFromArchive).toEqual({ links: 1, notes: 1 });
 
     upgraded.close();

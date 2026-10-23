@@ -443,7 +443,7 @@ describe('migration from a links-only vault', () => {
     // rewriting or losing existing rows.
     const upgraded = new StashDatabase('legacy-v2-vault');
     await upgraded.open();
-    expect(upgraded.verno).toBe(6);
+    expect(upgraded.verno).toBe(7);
 
     const rows = await upgraded.links.toArray();
     expect(rows).toHaveLength(1);
@@ -453,6 +453,10 @@ describe('migration from a links-only vault', () => {
     // New tables exist and are empty.
     expect(await upgraded.notes.toArray()).toEqual([]);
     expect(await upgraded.noteLinks.toArray()).toEqual([]);
+    expect(await upgraded.syncBase.toArray()).toEqual([]);
+    expect(await upgraded.syncPeers.toArray()).toEqual([]);
+    expect(await upgraded.syncConflicts.toArray()).toEqual([]);
+    expect(await upgraded.syncMeta.toArray()).toEqual([]);
 
     // The app can then write notes straight away.
     const noteId = await mustCreate({ title: 'After upgrade' });

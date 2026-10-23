@@ -18,6 +18,8 @@ import {
 import { ACCENTS } from '@/lib/accent';
 import { RotateCcw } from '@/components/ui/icons';
 import { PrivacySettings } from '@/components/privacy/privacy-settings';
+import { SyncSettings } from '@/components/sync/sync-settings';
+import { useSyncStore } from '@/stores/sync-store';
 import { ConfirmAuth } from '@/components/privacy/confirm-auth';
 import { ExportPanel } from '@/components/backup/export-panel';
 import { ANDROID_DOWNLOAD_URL, ShareGuide } from '@/components/onboarding/share-guide';
@@ -61,6 +63,7 @@ export default function SettingsPage() {
   const setMode = useThemeStore((state) => state.setMode);
   const accent = useThemeStore((state) => state.accent);
   const setAccent = useThemeStore((state) => state.setAccent);
+  const syncing = useSyncStore((state) => state.syncing);
 
   const [busy, setBusy] = React.useState(false);
   const [guideOpen, setGuideOpen] = React.useState(false);
@@ -99,7 +102,21 @@ export default function SettingsPage() {
   }, [loadTrash]);
 
   const handleErase = async () => {
+    // The database is deleted below. An engine holding an open transaction at
+    // that moment, or an auto-sync timer firing just after it, would be working
+    // against a database that no longer exists. The button is disabled while a
+    // sync runs, but authorisation can take long enough for one to start.
+    if (useSyncStore.getState().syncing) {
+      setEraseAuthorising(false);
+      setBusy(false);
+      toast('A sync is still running. Wait for it to finish, then erase again.', { tone: 'danger' });
+      return;
+    }
     setBusy(true);
+    // Stop sync *before* the database goes away: the grant is revoked, timers are
+    // cleared and the UI stops claiming a connection, so the emptied vault can
+    // never be published as a set of deletions. Nothing is removed from Drive.
+    await useSyncStore.getState().resetAfterErase();
     const { eraseVault } = await import('@/db/repos/vault');
     await eraseVault();
     // The privacy session is rebuilt, not just the vault: the erasure removed the
@@ -118,7 +135,7 @@ export default function SettingsPage() {
   return (
     <>
       <PageHeader>
-        <PageTitle subtitle="Stored only on this device">Settings</PageTitle>
+        <PageTitle subtitle="Local-first, synced only if you ask">Settings</PageTitle>
       </PageHeader>
 
       <Section title="Appearance">
@@ -190,6 +207,8 @@ export default function SettingsPage() {
       </Section>
 
       <PrivacySettings />
+
+      <SyncSettings />
 
       <Section title="Saving from other apps">
         {/*
@@ -278,8 +297,9 @@ export default function SettingsPage() {
         </div>
         <p className="flex items-start gap-2 px-5 pt-2.5 text-meta leading-relaxed text-subtle">
           <Shield size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
-          Nothing here is uploaded. There is no account and no server, so the vault works exactly the same in
-          airplane mode.
+          Stash has no server. Your vault lives on this device and works exactly the same in airplane mode. If
+          you turn on Google Drive sync, a copy also lives in your own Drive’s private app-data folder — and
+          only while you keep it connected.
         </p>
       </Section>
 
@@ -346,7 +366,7 @@ export default function SettingsPage() {
               reason="Erase your Stash vault"
               confirmLabel="Erase vault"
               tone="danger"
-              disabled={!confirmErase}
+              disabled={!confirmErase || syncing}
               onAuthorized={handleErase}
               onCancel={() => setEraseAuthorising(false)}
               hint="Enter your passcode, or confirm with the device prompt, to erase everything on this device."
@@ -355,12 +375,17 @@ export default function SettingsPage() {
             <Button
               variant="danger"
               className="mt-3 w-full"
-              disabled={!confirmErase || busy}
+              disabled={!confirmErase || busy || syncing}
               onClick={() => setEraseAuthorising(true)}
             >
               <Trash2 size={18} strokeWidth={2.1} aria-hidden />
               Erase vault
             </Button>
+          )}
+          {syncing && (
+            <p className="mt-2 px-1 text-meta text-subtle">
+              Erase waits for the sync in progress to finish.
+            </p>
           )}
         </div>
       </Section>

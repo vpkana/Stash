@@ -12,9 +12,10 @@ public class MainActivity extends BridgeActivity {
     /**
      * Register the plugins that are local to the app rather than shipped as npm
      * packages. Capacitor's own plugins register themselves from the generated
-     * plugin manifest; these two are small enough to live here, and keeping them
-     * local means the two places that touch Android-specific behaviour — the
-     * window flags and the incoming share — have no third-party dependency.
+     * plugin manifest; these three are small enough to live here, and keeping
+     * them local means the parts that touch Android-specific behaviour — the
+     * window flags, the incoming share and the Google token exchange — have no
+     * third-party dependency.
      *
      * The share receiver needs no further wiring: registering it before
      * `super.onCreate` is enough, because Capacitor replays the launching intent
@@ -46,6 +47,7 @@ public class MainActivity extends BridgeActivity {
         EdgeToEdge.enable(this);
         registerPlugin(PrivacyScreenPlugin.class);
         registerPlugin(ShareReceiverPlugin.class);
+        registerPlugin(GoogleAuthPlugin.class);
         super.onCreate(savedInstanceState);
 
         /*
