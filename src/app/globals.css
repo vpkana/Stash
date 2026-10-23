@@ -64,20 +64,27 @@
   --border-strong: #a9b0c8;
 
   /* --- Accent -------------------------------------------------------------
-   * Vivid indigo. Used for: the one primary action, the current selection, focus.
-   * Never for decoration — that is what the identity tones are for.
+   * Blue, by default. Used for: the one primary action, the current selection,
+   * focus. Never for decoration — that is what the identity tones are for.
+   *
+   * These four values are the default palette; every other colour the user can
+   * pick is an override further down, selected by `data-accent` on the root.
    */
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
   --accent-fg: #ffffff;
-  --accent-soft: #e9e7ff;
+  --accent-soft: #e3ecff;
 
   /* --- Brand --------------------------------------------------------------
    * Fixed, theme-independent: the tile the app icon is drawn on, and the mark
    * that sits on it. Same object in light and dark.
+   *
+   * Deliberately not the accent. The accent is the user's to change now (see the
+   * palettes below), and an icon that changed with it would be a different app
+   * on every phone.
    */
-  --brand-ink: #1b1a4d;
-  --brand-cream: #ffffff;
+  --brand-ink: #171821;
+  --brand-cream: #f3ecdf;
 
   /*
    * --- Identity tones -----------------------------------------------------
@@ -148,10 +155,10 @@
   --border: #313647;
   --border-strong: #474e64;
 
-  --accent: #a5b4fc;
-  --accent-hover: #c3ccff;
-  --accent-fg: #191a4d;
-  --accent-soft: #262a52;
+  --accent: #93c5fd;
+  --accent-hover: #bfdbfe;
+  --accent-fg: #0b1b3a;
+  --accent-soft: #17274a;
 
   /* The same eight identities, lifted: a bright glyph on a deep tint reads the
      same on a phone at night as the light pair does in daylight. */
@@ -182,6 +189,114 @@
   --elevation-raised: 0 2px 12px -2px rgb(0 0 0 / 0.45);
   --elevation-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 10px 24px -16px rgb(0 0 0 / 0.5);
   color-scheme: dark;
+}
+
+/*
+ * --- Accent palettes -------------------------------------------------------
+ * The user's choice of primary colour (Settings → Appearance → Accent). Blue is
+ * the default and lives in the two blocks above; these are the alternatives, and
+ * each one is an override of the same four tokens — nothing else in the sheet
+ * knows which is selected.
+ *
+ * Selected by `data-accent` on the root, which the boot script sets before the
+ * first paint so a chosen colour never flashes blue on the way in. The pairs are
+ * tuned rather than generated: the dark column is a *lifted* hue with a dark
+ * filled-button foreground, because a saturated blue would have to be too light
+ * to read as blue on a near-black surface.
+ *
+ * Specificity, deliberately: the light rule carries `:root` so it outranks the
+ * `.dark` defaults, and the dark rule follows it at the same specificity so it
+ * wins again when both apply.
+ */
+:root[data-accent='indigo'] {
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-fg: #ffffff;
+  --accent-soft: #e9e7ff;
+}
+.dark[data-accent='indigo'] {
+  --accent: #a5b4fc;
+  --accent-hover: #c3ccff;
+  --accent-fg: #191a4d;
+  --accent-soft: #262a52;
+}
+
+:root[data-accent='violet'] {
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-fg: #ffffff;
+  --accent-soft: #f1e9ff;
+}
+.dark[data-accent='violet'] {
+  --accent: #c4b5fd;
+  --accent-hover: #ddd6fe;
+  --accent-fg: #241448;
+  --accent-soft: #2b1c53;
+}
+
+:root[data-accent='rose'] {
+  --accent: #e11d48;
+  --accent-hover: #be123c;
+  --accent-fg: #ffffff;
+  --accent-soft: #ffe4e9;
+}
+.dark[data-accent='rose'] {
+  --accent: #fda4af;
+  --accent-hover: #fecdd3;
+  --accent-fg: #3c0b16;
+  --accent-soft: #3c1521;
+}
+
+:root[data-accent='amber'] {
+  --accent: #b45309;
+  --accent-hover: #92400e;
+  --accent-fg: #ffffff;
+  --accent-soft: #fdf1cd;
+}
+.dark[data-accent='amber'] {
+  --accent: #fcd34d;
+  --accent-hover: #fde68a;
+  --accent-fg: #3a2a05;
+  --accent-soft: #382d11;
+}
+
+:root[data-accent='emerald'] {
+  --accent: #047857;
+  --accent-hover: #065f46;
+  --accent-fg: #ffffff;
+  --accent-soft: #d5f7e8;
+}
+.dark[data-accent='emerald'] {
+  --accent: #6ee7b7;
+  --accent-hover: #a7f3d0;
+  --accent-fg: #062e22;
+  --accent-soft: #0f3126;
+}
+
+:root[data-accent='teal'] {
+  --accent: #0e7490;
+  --accent-hover: #155e75;
+  --accent-fg: #ffffff;
+  --accent-soft: #d3f2fa;
+}
+.dark[data-accent='teal'] {
+  --accent: #67e8f9;
+  --accent-hover: #a5f3fc;
+  --accent-fg: #082f38;
+  --accent-soft: #0d3039;
+}
+
+:root[data-accent='graphite'] {
+  --accent: #3f4a5a;
+  --accent-hover: #2c3542;
+  --accent-fg: #ffffff;
+  --accent-soft: #e8ebf1;
+}
+.dark[data-accent='graphite'] {
+  --accent: #cbd5e1;
+  --accent-hover: #e2e8f0;
+  --accent-fg: #131820;
+  --accent-soft: #252c38;
 }
 
 @theme inline {

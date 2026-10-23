@@ -216,6 +216,8 @@ export interface SecurityRow {
 
 export const META_KEYS = {
   themeMode: 'theme.mode',
+  /** The accent palette, by id. Validated against `src/lib/accent.ts`. */
+  accent: 'theme.accent',
   recentFolders: 'capture.recentFolders',
   lastFolderId: 'capture.lastFolderId',
   seeded: 'db.seeded',

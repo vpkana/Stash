@@ -3,6 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
+  Check,
   ChevronRight,
   Download,
   Inbox,
@@ -14,6 +15,7 @@ import {
   Trash2,
   Upload,
 } from '@/components/ui/icons';
+import { ACCENTS } from '@/lib/accent';
 import { RotateCcw } from '@/components/ui/icons';
 import { PrivacySettings } from '@/components/privacy/privacy-settings';
 import { ConfirmAuth } from '@/components/privacy/confirm-auth';
@@ -57,6 +59,8 @@ export default function SettingsPage() {
   const refresh = useVaultStore((state) => state.refresh);
   const mode = useThemeStore((state) => state.mode);
   const setMode = useThemeStore((state) => state.setMode);
+  const accent = useThemeStore((state) => state.accent);
+  const setAccent = useThemeStore((state) => state.setAccent);
 
   const [busy, setBusy] = React.useState(false);
   const [guideOpen, setGuideOpen] = React.useState(false);
@@ -135,6 +139,48 @@ export default function SettingsPage() {
                   )}
                 >
                   <OptionIcon size={18} strokeWidth={active ? 2.2 : 1.9} aria-hidden />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/*
+          The accent, beside the mode rather than in a sub-screen: it is one
+          decision with eight answers, and the page is its own preview — pick a
+          swatch and the button above, the tab bar below and the selected row
+          all change while you look at them.
+        */}
+        <div className="card mx-4 mt-2 p-4">
+          <p className="text-row font-medium text-fg">Accent colour</p>
+          <p className="mt-0.5 text-meta leading-relaxed text-subtle">
+            Used for the primary action, the current tab and selections. The app icon stays ink and cream
+            whatever you choose.
+          </p>
+          <div className="mt-3 grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Accent colour">
+            {ACCENTS.map((option) => {
+              const active = accent === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  aria-label={option.label}
+                  onClick={() => void setAccent(option.id)}
+                  className={cn(
+                    'tap flex flex-col items-center gap-1.5 rounded-xl px-1 pt-2 pb-1.5 text-meta font-medium',
+                    active ? 'bg-accent-soft text-accent' : 'text-muted active:bg-surface-2',
+                  )}
+                >
+                  <span
+                    className="flex size-7 items-center justify-center rounded-full ring-1 ring-black/15 ring-inset"
+                    style={{ backgroundColor: option.swatch }}
+                    aria-hidden
+                  >
+                    {active ? <Check size={15} strokeWidth={3} className="text-white" /> : null}
+                  </span>
                   {option.label}
                 </button>
               );

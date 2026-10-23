@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Download, ExternalLink, Link2, MoreHorizontal, Share2, Smartphone } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { LogoMark } from '@/components/ui/logo';
@@ -58,6 +59,17 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
 
   if (!open) return null;
 
+  /*
+   * The third card exists for the web build only.
+   *
+   * It tells the reader that a browser cannot receive a share and points at the
+   * Android app. Inside the Android app that is not just redundant, it is wrong:
+   * the feature is already there, and "Continue in the browser" describes an app
+   * the user is not in. The two real instructions — a browser's share sheet and
+   * a social app's "More" row — are exactly the same on both platforms.
+   */
+  const native = Capacitor.isNativePlatform();
+
   const steps = [
     {
       title: 'From your browser',
@@ -69,11 +81,15 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
       body: 'In Instagram, YouTube or X the first row of the share sheet is short. Tap More and Stash is in the full list.',
       art: <SocialMock />,
     },
-    {
-      title: 'Sharing needs the phone app',
-      body: 'A browser cannot hand a link to another website, so this works in the Android build only. Everything else — reading, searching, notes — works exactly the same on the web.',
-      art: <PhoneCallout />,
-    },
+    ...(native
+      ? []
+      : [
+          {
+            title: 'Sharing needs the phone app',
+            body: 'A browser cannot hand a link to another website, so this works in the Android build only. Everything else — reading, searching, notes — works exactly the same on the web.',
+            art: <PhoneCallout />,
+          },
+        ]),
   ];
 
   const current = steps[step] ?? steps[0]!;
@@ -113,16 +129,22 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
             ) : null}
             <div className="flex-1" />
             {last ? (
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={() => {
-                  void openExternal(ANDROID_DOWNLOAD_URL);
-                }}
-              >
-                <Download size={16} strokeWidth={2.1} aria-hidden />
-                Get the Android app
-              </Button>
+              native ? (
+                <Button variant="primary" size="sm" onClick={close}>
+                  Done
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => {
+                    void openExternal(ANDROID_DOWNLOAD_URL);
+                  }}
+                >
+                  <Download size={16} strokeWidth={2.1} aria-hidden />
+                  Get the Android app
+                </Button>
+              )
             ) : (
               <Button variant="accentSoft" size="sm" onClick={() => setStep((value) => value + 1)}>
                 Next
@@ -130,13 +152,15 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={close}
-            className="tap mx-auto mb-2 block rounded-full px-4 py-2 text-meta font-medium text-subtle active:bg-surface-2"
-          >
-            {last ? 'Continue in the browser' : 'Skip'}
-          </button>
+          {!(native && last) ? (
+            <button
+              type="button"
+              onClick={close}
+              className="tap mx-auto mb-2 block rounded-full px-4 py-2 text-meta font-medium text-subtle active:bg-surface-2"
+            >
+              {native ? 'Skip' : last ? 'Continue in the browser' : 'Skip'}
+            </button>
+          ) : null}
         </SheetBody>
       </SheetContent>
     </Sheet>

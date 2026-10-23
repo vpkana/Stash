@@ -24,6 +24,19 @@
         <item name="windowNoTitle">true</item>
 
         <!--
+            Text selection must float, not become a contextual action bar.
+
+            With this unset, Android tries to present the selection menu as a
+            contextual bar in the action-bar slot. This theme has no action bar,
+            so on some WebView versions that slot is laid out empty and the
+            copy/cut menu arrives as a very large blank strip over the note —
+            exactly where the writing toolbar is. Overlay mode uses the floating
+            toolbar, which sits beside the selection and takes only the space its
+            three items need.
+        -->
+        <item name="android:windowActionModeOverlay">true</item>
+
+        <!--
             Both spellings, both as a concrete colour.
 
             `android:background` here used to be `@null`, meaning "paint nothing"

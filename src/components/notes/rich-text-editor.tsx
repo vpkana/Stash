@@ -4,13 +4,17 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 import {
   activeFormats,
+  caretInsideFormat,
   enclosingAnchor,
   htmlToMarkdown,
   markdownToHtml,
   runEditorCommand,
   escapeHtml,
+  insertArmedText,
+  insertTextOutsideFormat,
   type EditorCommand,
   type FormatState,
+  type TypingCommand,
 } from '@/lib/markdown-html';
 import { trailingUrl } from '@/lib/markdown';
 
@@ -120,6 +124,37 @@ export function RichTextEditor({
    */
   const savedRange = React.useRef<Range | null>(null);
   /**
+   * The last caret position this body had.
+   *
+   * A toolbar tap on Android can take the selection away before the click
+   * handler runs, and focusing the editable again puts the caret at the start.
+   * Remembering the range is what makes Bold apply to the words that were
+   * selected rather than to the beginning of the note.
+   */
+  const lastRange = React.useRef<Range | null>(null);
+  /**
+   * The inline format armed at a collapsed caret, waiting for its first character.
+   *
+   * This is deliberately not the engine's pending format. `execCommand` may or may
+   * not remember one across a keystroke — Android's WebView frequently does not —
+   * and `queryCommandState` then reports a state that disagrees with the text, so
+   * the button appears stuck. The intent lives here instead, and the first
+   * character is written into a real element by {@link insertArmedText}; every
+   * later character follows the caret inside that element without any help from
+   * the engine.
+   */
+  const armed = React.useRef<TypingCommand | null>(null);
+  /**
+   * The format the next character is escaping.
+   *
+   * The other half of the same idea: the caret is inside a run, the button was
+   * pressed to turn it off, and the next character has to be written *outside*
+   * that run. An empty caret position cannot express that — the browser
+   * normalises it away and the character lands back inside — so
+   * {@link insertTextOutsideFormat} writes real text past the run instead.
+   */
+  const escaping = React.useRef<TypingCommand | null>(null);
+  /**
    * The Markdown this editor last produced, so an incoming change that is *its
    * own* output is not applied back as a DOM rewrite. Comparing against the value
    * prop directly would be the same thing until the first time two different
@@ -215,7 +250,25 @@ export function RichTextEditor({
   }, [read]);
 
   const publishFormats = React.useCallback(() => {
-    onFormatsRef.current?.(activeFormats());
+    const base = activeFormats();
+    const selection = document.getSelection();
+    const collapsed = selection?.isCollapsed ?? true;
+    if (!collapsed) {
+      onFormatsRef.current?.(base);
+      return;
+    }
+    /*
+     * A pending format is not in the document yet, so the structural answer is
+     * incomplete: armed means the next character will be bold even though nothing
+     * is, and escaping means it will be plain even though the caret is sitting in
+     * bold text. Those two intentions override the document until the first
+     * character lands, which is what lets the button read as a toggle instead of
+     * going dark while the next letter is still going to be bold.
+     */
+    const escape = escaping.current;
+    const pending = armed.current;
+    const next = escape ? { ...base, [escape]: false } : base;
+    onFormatsRef.current?.(pending ? { ...next, [pending]: true } : next);
   }, []);
 
   /**
@@ -373,12 +426,75 @@ export function RichTextEditor({
     [insertHtml, readOnly, restoreSelection],
   );
 
+  /**
+   * Put the caret back on this surface before a command runs.
+   *
+   * The live selection wins when it is still inside the body. When it is not —
+   * a toolbar tap on Android may already have moved focus and dropped it — the
+   * last position seen inside the body is restored instead. The range is added
+   * *after* focus for the same reason as in the title: focusing an editable that
+   * lost its caret otherwise puts the caret at the start of the note.
+   */
+  const restoreEditorSelection = React.useCallback(() => {
+    const element = ref.current;
+    if (!element) return;
+    const selection = document.getSelection();
+    const live =
+      selection && selection.rangeCount > 0 && element.contains(selection.anchorNode)
+        ? selection.getRangeAt(0).cloneRange()
+        : null;
+    const remembered =
+      lastRange.current && element.contains(lastRange.current.startContainer) ? lastRange.current : null;
+    const target = live ?? remembered;
+    if (document.activeElement !== element) element.focus({ preventScroll: true });
+    if (target) {
+      const restored = document.getSelection();
+      restored?.removeAllRanges();
+      restored?.addRange(target);
+    }
+  }, []);
+
   const api = React.useMemo<RichTextApi>(
     () => ({
       run: (command) => {
         const element = ref.current;
         if (!element || readOnly) return;
-        element.focus();
+        restoreEditorSelection();
+
+        const typing =
+          command === 'bold' || command === 'italic' || command === 'strike' || command === 'code';
+        const selection = document.getSelection();
+        const collapsed = !selection || selection.isCollapsed;
+
+        if (typing && collapsed) {
+          const format: TypingCommand = command;
+          if (escaping.current === format) {
+            /*
+             * Pressed again while escaping: cancel the escape and let ordinary
+             * typing continue inside the run that is already there. Arming a
+             * second wrapper would nest one bold inside another.
+             */
+            escaping.current = null;
+            armed.current = null;
+          } else if (caretInsideFormat(format)) {
+            // The "off" half: leave the run alone, step the next character out.
+            armed.current = null;
+            escaping.current = format;
+          } else {
+            escaping.current = null;
+            armed.current = armed.current === format ? null : format;
+          }
+          publishFormats();
+          return;
+        }
+
+        /*
+         * Anything with a selection, and every block command, is a real edit. The
+         * pending intent has been consumed or contradicted; it must not survive
+         * into the next paragraph.
+         */
+        armed.current = null;
+        escaping.current = null;
         if (command === 'checklist') {
           toggleChecklistAtSelection();
         } else {
@@ -386,6 +502,10 @@ export function RichTextEditor({
         }
         emit();
         publishFormats();
+        const after = document.getSelection();
+        if (after && after.rangeCount > 0 && element.contains(after.anchorNode)) {
+          lastRange.current = after.getRangeAt(0).cloneRange();
+        }
       },
       saveSelection: () => {
         const element = ref.current;
@@ -403,7 +523,7 @@ export function RichTextEditor({
       insertText: (text) => insertHtml(escapeHtml(text)),
       focus: () => ref.current?.focus(),
     }),
-    [emit, insertHtml, insertLinkAtCaret, publishFormats, readOnly, toggleChecklistAtSelection],
+    [emit, insertHtml, insertLinkAtCaret, publishFormats, readOnly, restoreEditorSelection, toggleChecklistAtSelection],
   );
 
   /*
@@ -420,7 +540,18 @@ export function RichTextEditor({
     const onSelectionChange = () => {
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0) return;
-      if (!ref.current?.contains(selection.anchorNode)) return;
+      if (!ref.current?.contains(selection.anchorNode)) {
+        armed.current = null;
+        escaping.current = null;
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      if (!range.collapsed) {
+        // Selecting text is not a request to arm a format for the next word.
+        armed.current = null;
+        escaping.current = null;
+      }
+      lastRange.current = range.cloneRange();
       publishFormats();
     };
     document.addEventListener('selectionchange', onSelectionChange);
@@ -504,6 +635,69 @@ export function RichTextEditor({
       suppressContentEditableWarning
       spellCheck
       onInput={onInput}
+      onBeforeInput={(event) => {
+        if (readOnly) return;
+        const native = event.nativeEvent as InputEvent;
+        if (native.inputType !== 'insertText' || !native.data) return;
+
+        // Leaving a run: the first plain character is written outside it.
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, native.data);
+          emit();
+          publishFormats();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        armed.current = null;
+        insertArmedText(format, native.data);
+        emit();
+        publishFormats();
+      }}
+      onKeyDown={(event) => {
+        if (readOnly) return;
+        /*
+         * The first character of an armed format.
+         *
+         * Done here as well as in `onBeforeInput` because keydown runs first and
+         * is the one event every engine dispatches for a printable key; cancelling
+         * it stops the plain character from being inserted, and the wrapped one
+         * goes in instead. Composition is left alone — an IME owns its own text
+         * until it commits.
+         */
+        const native = event.nativeEvent;
+        if (native.isComposing || native.ctrlKey || native.metaKey || native.altKey) return;
+        if (event.key.length !== 1) return;
+
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, event.key);
+          emit();
+          publishFormats();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        armed.current = null;
+        insertArmedText(format, event.key);
+        emit();
+        publishFormats();
+      }}
+      onBlur={() => {
+        // A pending format belongs to the caret that armed it; leaving the body
+        // must not decorate the next thing the user clicks into.
+        armed.current = null;
+        escaping.current = null;
+      }}
       onClick={onClick}
       onFocus={() => {
         onFocus?.();

@@ -5,10 +5,12 @@ import { cn } from '@/lib/utils';
 import {
   activeFormats,
   caretInsideFormat,
-  formatElementAtCaret,
   htmlToInlineMarkdown,
   inlineToHtml,
+  insertArmedText,
+  insertTextOutsideFormat,
   toggleInlineElement,
+  TYPING_TAGS,
   type EditorCommand,
   type FormatState,
   type TypingCommand,
@@ -63,81 +65,6 @@ export interface NoteTitleApi {
 /** Titles are one line by definition; the storage layer agrees. */
 const MAX_LENGTH = 120;
 
-/** The element each inline format writes. */
-const TYPING_TAG: Record<TypingCommand, 'b' | 'i' | 'del' | 'code'> = {
-  bold: 'b',
-  italic: 'i',
-  strike: 'del',
-  code: 'code',
-};
-
-/**
- * Insert the first character of an armed format, wrapped, with the caret inside.
- *
- * The caret ends up in a text node that is inside the tag, which is what makes
- * the *rest* of the word land there too — no per-keystroke interception, and
- * nothing for the browser to normalise away.
- */
-function insertArmedText(format: TypingCommand, text: string): void {
-  const selection = document.getSelection();
-  if (!selection || selection.rangeCount === 0) return;
-  const range = selection.getRangeAt(0);
-  const wrapper = document.createElement(TYPING_TAG[format]);
-  wrapper.textContent = text;
-  range.deleteContents();
-  range.insertNode(wrapper);
-  const caret = document.createRange();
-  caret.setStart(wrapper.firstChild ?? wrapper, wrapper.firstChild ? text.length : 0);
-  caret.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(caret);
-}
-
-/**
- * Insert the first plain character *outside* the run of formatting it escapes.
- *
- * Pressing Bold with the caret inside bold text has to make the next character
- * plain, and leaving the caret on an empty text node does not do it: the browser
- * normalises the empty node away and the character lands back inside the run.
- * Writing real text outside the run gives the caret a home that survives, and
- * the rest of the word follows it.
- */
-function insertTextOutsideFormat(format: TypingCommand, text: string): void {
-  const selection = document.getSelection();
-  if (!selection || selection.rangeCount === 0) return;
-  const range = selection.getRangeAt(0);
-  const active = formatElementAtCaret(format);
-  const node = document.createTextNode(text);
-
-  if (!active || !active.contains(range.startContainer) || !active.parentNode) {
-    range.deleteContents();
-    range.insertNode(node);
-  } else {
-    const parent = active.parentNode;
-    // Keep whatever was after the caret formatted: split the run and put the new
-    // plain character between the halves.
-    const tail = document.createRange();
-    tail.setStart(range.startContainer, range.startOffset);
-    tail.setEnd(active, active.childNodes.length);
-    const tailContent = tail.extractContents();
-    const hasTail = (tailContent.textContent ?? '').replace(/\u200b/g, '').trim().length > 0;
-    if (hasTail) {
-      const rest = active.cloneNode(false) as HTMLElement;
-      rest.appendChild(tailContent);
-      parent.insertBefore(node, active.nextSibling);
-      parent.insertBefore(rest, node.nextSibling);
-    } else {
-      parent.insertBefore(node, active.nextSibling);
-    }
-  }
-
-  const caret = document.createRange();
-  caret.setStart(node, text.length);
-  caret.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(caret);
-}
-
 export function NoteTitle({
   value,
   onChange,
@@ -152,6 +79,16 @@ export function NoteTitle({
 }: NoteTitleProps) {
   const ref = React.useRef<HTMLDivElement>(null);
   const lastEmitted = React.useRef<string | null>(null);
+  /**
+   * The last caret position this title had.
+   *
+   * A tap on the formatting bar can take the selection away before the click
+   * handler runs — touch events on Android are not ordered like a desktop mouse
+   * — and `focus()` on a surface that lost its selection puts the caret at the
+   * start. Remembering the range and putting it back is what makes the button
+   * format the words the user selected instead of a different spot.
+   */
+  const lastRange = React.useRef<Range | null>(null);
   /**
    * The inline format armed at a collapsed caret, waiting for its first character.
    *
@@ -262,7 +199,29 @@ export function NoteTitle({
          * meaning on a one-line title and is ignored here.
          */
         if (command !== 'bold' && command !== 'italic' && command !== 'strike' && command !== 'code') return;
-        element.focus();
+
+        /*
+         * A toolbar tap can arrive after focus and the selection have already
+         * moved. The live range is preferred, the last in-title position is the
+         * fallback, and the range is put back *after* focus — focusing an editable
+         * that lost its caret otherwise drops the caret at the start of the title.
+         */
+        const live = document.getSelection();
+        const liveRange =
+          live && live.rangeCount > 0 && element.contains(live.anchorNode)
+            ? live.getRangeAt(0).cloneRange()
+            : null;
+        const remembered =
+          lastRange.current && element.contains(lastRange.current.startContainer)
+            ? lastRange.current
+            : null;
+        const target = liveRange ?? remembered;
+        if (document.activeElement !== element) element.focus();
+        if (target) {
+          const restored = document.getSelection();
+          restored?.removeAllRanges();
+          restored?.addRange(target);
+        }
 
         const selection = document.getSelection();
         const collapsed = selection?.isCollapsed ?? true;
@@ -270,7 +229,7 @@ export function NoteTitle({
         if (!collapsed) {
           armed.current = null;
           escaping.current = null;
-          toggleInlineElement(TYPING_TAG[command]);
+          toggleInlineElement(TYPING_TAGS[command]);
           emit();
           return;
         }
@@ -280,9 +239,14 @@ export function NoteTitle({
          * a *state*: remembered here and applied by the next character typed.
          */
         if (escaping.current === command) {
-          // Pressed again while escaping: arm it again, at the same caret.
+          /*
+           * Pressed again while escaping: cancel the escape and let ordinary
+           * typing continue inside the run that is already there. Arming a fresh
+           * wrapper here would nest one bold inside another, which is the same
+           * format said twice in the stored Markdown.
+           */
           escaping.current = null;
-          armed.current = command;
+          armed.current = null;
           publishFormats();
           return;
         }
@@ -318,6 +282,13 @@ export function NoteTitle({
         escaping.current = null;
         return;
       }
+      const range = selection.getRangeAt(0);
+      if (!range.collapsed) {
+        // Selecting text is not a request to arm a format for the next word.
+        armed.current = null;
+        escaping.current = null;
+      }
+      lastRange.current = range.cloneRange();
       publishFormats();
     };
     document.addEventListener('selectionchange', onSelectionChange);
@@ -359,6 +330,7 @@ export function NoteTitle({
         const format = armed.current;
         if (!format || caretInsideFormat(format)) return;
         event.preventDefault();
+        armed.current = null;
         insertArmedText(format, native.data);
         emit();
       }}
@@ -417,6 +389,7 @@ export function NoteTitle({
         const format = armed.current;
         if (!format || caretInsideFormat(format)) return;
         event.preventDefault();
+        armed.current = null;
         insertArmedText(format, event.key);
         emit();
       }}

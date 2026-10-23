@@ -6,6 +6,7 @@ import {
   type PrivacySettings,
   type RelockPolicy,
 } from '../index';
+import { DEFAULT_ACCENT, isAccentId, type AccentId } from '@/lib/accent';
 import { isRelockPolicy } from '@/lib/privacy/session';
 import { isTrashed } from '@/lib/trash';
 
@@ -68,6 +69,23 @@ export async function getThemeMode(): Promise<ThemeMode> {
 
 export async function setThemeMode(mode: ThemeMode): Promise<void> {
   await setMeta(META_KEYS.themeMode, mode);
+}
+
+/**
+ * The chosen accent palette.
+ *
+ * Stored as an id rather than a colour so the palette can be re-tuned in a later
+ * build without the user's choice becoming a stale hex. An id this build does
+ * not know reads as the default, which is the only safe answer: an unknown value
+ * would leave the root with no palette at all.
+ */
+export async function getAccent(): Promise<AccentId> {
+  const value = await getMeta<unknown>(META_KEYS.accent, DEFAULT_ACCENT);
+  return isAccentId(value) ? value : DEFAULT_ACCENT;
+}
+
+export async function setAccent(accent: AccentId): Promise<void> {
+  await setMeta(META_KEYS.accent, accent);
 }
 
 /**

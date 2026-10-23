@@ -36,13 +36,17 @@ export const viewport: Viewport = {
 };
 
 /**
- * Applied before first paint so a device set to dark never flashes white.
+ * Applied before first paint so a device set to dark never flashes white, and a
+ * chosen accent never flashes blue.
  *
- * `localStorage` is used purely as a paint-time cache of the theme mode; the
+ * `localStorage` is used purely as a paint-time cache of both preferences; the
  * source of truth stays in IndexedDB alongside the rest of the user's data, and
- * the real theme store overwrites whatever this sets a moment later.
+ * the real theme store overwrites whatever this sets a moment later. The accent
+ * id is not validated here on purpose: an unknown value matches no `data-accent`
+ * block, which leaves the stylesheet's own default in place — the safe answer,
+ * and one less copy of the palette list to keep in sync.
  */
-const THEME_BOOT_SCRIPT = `(function(){try{var m=localStorage.getItem('stash.theme');var d=m==='dark'||((!m||m==='system')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.classList.toggle('dark',d);r.style.colorScheme=d?'dark':'light';}catch(e){}})();`;
+const THEME_BOOT_SCRIPT = `(function(){try{var m=localStorage.getItem('stash.theme');var d=m==='dark'||((!m||m==='system')&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.classList.toggle('dark',d);r.style.colorScheme=d?'dark':'light';var a=localStorage.getItem('stash.accent');if(a){r.dataset.accent=a;}}catch(e){}})();`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

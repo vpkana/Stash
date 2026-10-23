@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronRight, FileText, Link2, Lock, MoreHorizontal, NotebookPen, Star } from '@/components/ui/icons';
+import { ChevronRight, Link2, Lock, MoreHorizontal, NotebookPen, Star } from '@/components/ui/icons';
 import type { Note } from '@/db/types';
 import { checklistProgress } from '@/lib/markdown';
 import { formatRelative, pluralize } from '@/lib/format';
@@ -11,8 +11,6 @@ import type { DragRowProps } from '@/hooks/use-drag-sort';
 import { DragGrip } from '@/components/ui/drag-grip';
 import { useVaultStore } from '@/stores/vault-store';
 import { LockedRow, useRevealLocked } from '@/components/privacy/locked-row';
-import { IdentityTile } from '@/components/ui/identity-tile';
-import { identityColor } from '@/lib/identity-color';
 import { cn } from '@/lib/utils';
 
 /**
@@ -23,11 +21,11 @@ import { cn } from '@/lib/utils';
  * attached — without becoming a card. A note that is a container reads as a
  * container; a note with content shows its opening line.
  *
- * The leading tile carries the note's own identity tone, and its glyph says
- * whether the note is a *container* — a notebook for a note with subnotes, a
- * single page for one without. The tone is what makes the colour a label rather
- * than decoration; the glyph is what keeps the tile from being forty identical
- * squares in eight colours.
+ * Notes are the one list without an identity tone. A folder's colour is a label
+ * the user chose and a link's is derived from its source; a note is just writing,
+ * and forty notes in eight arbitrary colours said nothing except that the colours
+ * were arbitrary. One quiet glyph for every note in the list — a subnote count
+ * and the chevron still mark a container, because that is information.
  */
 export interface NoteRowProps {
   note: Note;
@@ -68,8 +66,6 @@ export function NoteRow({
   const access = useLockState('note', note.id);
   const { reveal, busy: revealing } = useRevealLocked();
   const checklist = React.useMemo(() => checklistProgress(note.content), [note.content]);
-  // Derived from the id, so a note keeps its colour for as long as it exists.
-  const tone = identityColor(note.id);
 
   const meta: string[] = [];
   if (childCount > 0) meta.push(pluralize(childCount, 'subnote'));
@@ -103,13 +99,11 @@ export function NoteRow({
         }}
         className="tap flex min-w-0 flex-1 items-center gap-3 px-4 py-3.5 text-left active:bg-surface-2"
       >
-        <IdentityTile color={tone}>
-          {childCount > 0 ? (
-            <NotebookPen size={19} strokeWidth={1.8} aria-hidden />
-          ) : (
-            <FileText size={19} strokeWidth={1.8} aria-hidden />
-          )}
-        </IdentityTile>
+        {/* Sized like the tiles the other lists use, so titles line up across
+            screens; drawn in `subtle` so it is a marker, not a badge. */}
+        <span className="flex size-10 shrink-0 items-center justify-center text-subtle" aria-hidden>
+          <NotebookPen size={20} strokeWidth={1.7} />
+        </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
             <span className="text-row min-w-0 truncate font-medium text-fg">

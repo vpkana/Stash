@@ -212,12 +212,18 @@ export function NoteEditor({
       command === 'bold' || command === 'italic' || command === 'strike' || command === 'code';
     /*
      * Which surface is focused is read from the DOM at the moment of the press,
-     * not remembered from a focus event. The toolbar keeps focus where it was
-     * (`mousedown` is cancelled), so `activeElement` is exactly the surface the
-     * user is looking at — and unlike a stored flag it cannot be stale, or miss a
-     * focus that arrived in the same tick as the tap.
+     * not remembered from a focus event. The selection is asked first: a tap on
+     * Android can move focus to the button while leaving the selection behind in
+     * the title or body, and formatting must follow the words the user can see
+     * selected, not the control their finger happened to land on.
      */
-    const surface = document.activeElement?.closest('[data-surface]')?.getAttribute('data-surface');
+    const selection = document.getSelection();
+    const anchor = selection?.rangeCount ? selection.anchorNode : null;
+    const selectedSurface = (
+      anchor?.nodeType === 1 ? (anchor as Element) : (anchor?.parentElement ?? null)
+    )?.closest('[data-surface]')?.getAttribute('data-surface');
+    const focusedSurface = document.activeElement?.closest('[data-surface]')?.getAttribute('data-surface');
+    const surface = selectedSurface ?? focusedSurface;
     if (surface === 'title' && inline) {
       titleApiRef.current?.run(command);
       return;
@@ -410,7 +416,7 @@ export function NoteEditor({
             <ToolButton label="Bulleted list" icon={<List size={17} weight="bold" aria-hidden />} command="bulletList" onRun={runCommand} />
             <ToolButton label="Numbered list" icon={<ListOrdered size={17} weight="bold" aria-hidden />} command="orderedList" onRun={runCommand} />
             <ToolButton label="Checklist" icon={<ListChecks size={17} weight="bold" aria-hidden />} command="checklist" onRun={runCommand} />
-            <ToolButton label="Quote" icon={<Quote size={17} weight="bold" aria-hidden />} command="quote" onRun={runCommand} />
+            <ToolButton label="Quote" icon={<Quote size={17} weight="bold" aria-hidden />} command="quote" onRun={runCommand} active={formats.quote} />
             <Divider />
             <button
               type="button"

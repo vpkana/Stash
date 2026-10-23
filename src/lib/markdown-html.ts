@@ -536,6 +536,8 @@ export type EditorCommand =
   | 'checklist'
   | 'quote';
 
+export type TypingCommand = 'bold' | 'italic' | 'strike' | 'code';
+
 /**
  * The element an inline command wraps the *next* characters typed in.
  *
@@ -543,14 +545,12 @@ export type EditorCommand =
  * property of the line the caret is on, and the platform's own command handles
  * that correctly whether the selection is collapsed or not.
  */
-const TYPING_TAGS: Partial<Record<EditorCommand, string>> = {
+export const TYPING_TAGS: Record<TypingCommand, 'b' | 'i' | 'del' | 'code'> = {
   bold: 'b',
   italic: 'i',
   strike: 'del',
   code: 'code',
 };
-
-export type TypingCommand = 'bold' | 'italic' | 'strike' | 'code';
 
 /**
  * Every tag that *means* one of the typing formats, however it got there.
@@ -615,14 +615,26 @@ function clearStrayCarriers(host: HTMLElement | null, keep: Node | null): void {
   for (const node of strays) node.remove();
 }
 
+/**
+ * The heading tags this editor treats as "the heading format".
+ *
+ * All six, not just the one the button writes: a note can arrive from Markdown
+ * with `#`, `###` or anything in between, and a button that only recognised H2
+ * would report "not a heading" while the caret sat in one — so the first press
+ * would stamp a second heading rather than turn the first one off.
+ */
+const HEADING_TAGS = ['H1', 'H2', 'H3', 'H4', 'H5', 'H6'] as const;
+
 /** What the toolbar needs to know: which formats are on at the caret. */
 export interface FormatState {
   bold: boolean;
   italic: boolean;
   strike: boolean;
   code: boolean;
-  /** True where the caret's block is the heading the button produces. */
+  /** True where the caret's block is a heading. */
   heading: boolean;
+  /** True where the caret's block is a blockquote. */
+  quote: boolean;
 }
 
 export const NO_FORMATS: FormatState = {
@@ -631,6 +643,7 @@ export const NO_FORMATS: FormatState = {
   strike: false,
   code: false,
   heading: false,
+  quote: false,
 };
 
 /** The nearest ancestor of `node`, itself included, whose tag is in `tags`. */
@@ -663,52 +676,45 @@ function placeCaret(range: Range): void {
   selection.addRange(range);
 }
 
-function commandState(name: string): boolean {
-  try {
-    return document.queryCommandState(name);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Which formats are on where the caret is.
  *
- * Both questions are asked, because they answer different halves of it: the DOM
- * walk answers "is this text already bold" (which covers a caret parked in bold
- * text, and a selection over it), and `queryCommandState` answers "would the next
- * character be bold" (the engine's own pending state). Neither alone is right in
- * both cases, and the toolbar shows exactly one light per format.
+ * The answer is the document, not the engine. `queryCommandState` used to be
+ * consulted too, because it is the only thing that can describe a *pending*
+ * format — "the next character would be bold" — but on Android's WebView it is
+ * unreliable in exactly the case that matters: it reports the style of the run
+ * the caret sits in (or a stale state) rather than what the next keystroke will
+ * produce, so the button and the text disagree and a toggle appears stuck.
+ *
+ * Pending formats are handled by the editors themselves now (`RichTextEditor`
+ * and `NoteTitle` keep an armed/escaping ref and override this state while it is
+ * pending), which means a button's light always describes something true: this
+ * is inside that format, or the next character is about to be written into it.
  */
 export function activeFormats(): FormatState {
   if (typeof document === 'undefined') return NO_FORMATS;
   const selection = document.getSelection();
   if (!selection || selection.rangeCount === 0) return NO_FORMATS;
-  const start = selection.getRangeAt(0).startContainer;
-  const inTag = (tags: readonly string[]) => Boolean(enclosingTag(start, tags));
+  const range = selection.getRangeAt(0);
+  const start = range.startContainer;
+  const end = range.endContainer;
 
-  /*
-   * The title is asked a different question, and it has to be.
-   *
-   * A title is set in a semibold face, so the engine's own "is this bold" test
-   * answers yes about words nobody has ever bolded. A button driven by that
-   * answer is on from the moment the note opens and can never be turned off, no
-   * matter what the document says. So on the title the answer is the document
-   * alone — is this run inside a formatting tag — and anywhere else the engine's
-   * pending state is included, because only it can say what the *next* character
-   * would be.
+  /**
+   * A selection counts as formatted only when both ends sit inside it; a
+   * selection that starts in bold and ends in plain text is not "bold", and
+   * lighting the button there would claim the whole selection shares a format it
+   * does not. With a collapsed caret both ends are the same node.
    */
-  const structural = editingHostOf(start)?.getAttribute('data-surface') === 'title';
-  const collapsed = selection.isCollapsed;
-  const state = (name: string, tags: readonly string[]) =>
-    structural ? inTag(tags) : commandState(name) || (!collapsed && inTag(tags));
+  const inTag = (tags: readonly string[]) =>
+    Boolean(enclosingTag(start, tags) && enclosingTag(end, tags));
 
   return {
-    bold: state('bold', FORMAT_TAGS.bold),
-    italic: state('italic', FORMAT_TAGS.italic),
-    strike: state('strikeThrough', FORMAT_TAGS.strike),
+    bold: inTag(FORMAT_TAGS.bold),
+    italic: inTag(FORMAT_TAGS.italic),
+    strike: inTag(FORMAT_TAGS.strike),
     code: inTag(FORMAT_TAGS.code),
-    heading: currentBlock()?.tagName === 'H2',
+    heading: Boolean(enclosingTag(start, HEADING_TAGS)),
+    quote: Boolean(enclosingTag(start, ['BLOCKQUOTE'])),
   };
 }
 
@@ -883,6 +889,73 @@ export function toggleTypingStyle(command: TypingCommand): boolean {
 }
 
 /**
+ * Insert the first character of an armed format, wrapped, with the caret inside.
+ *
+ * Shared by the title and the body. The caret ends up in a text node that is
+ * inside the tag, which is what makes the *rest* of the word land there too — no
+ * per-keystroke interception, and nothing for the browser to normalise away.
+ */
+export function insertArmedText(format: TypingCommand, text: string): void {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const wrapper = document.createElement(TYPING_TAGS[format]);
+  wrapper.textContent = text;
+  range.deleteContents();
+  range.insertNode(wrapper);
+  const caret = document.createRange();
+  caret.setStart(wrapper.firstChild ?? wrapper, wrapper.firstChild ? text.length : 0);
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+}
+
+/**
+ * Insert the first plain character *outside* the run of formatting it escapes.
+ *
+ * Pressing Bold with the caret inside bold text has to make the next character
+ * plain, and leaving the caret on an empty text node does not do it: the browser
+ * normalises the empty node away and the character lands back inside the run.
+ * Writing real text outside the run gives the caret a home that survives, and
+ * the rest of the word follows it.
+ */
+export function insertTextOutsideFormat(format: TypingCommand, text: string): void {
+  const selection = document.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const active = formatElementAtCaret(format);
+  const node = document.createTextNode(text);
+
+  if (!active || !active.contains(range.startContainer) || !active.parentNode) {
+    range.deleteContents();
+    range.insertNode(node);
+  } else {
+    const parent = active.parentNode;
+    // Keep whatever was after the caret formatted: split the run and put the new
+    // plain character between the halves.
+    const tail = document.createRange();
+    tail.setStart(range.startContainer, range.startOffset);
+    tail.setEnd(active, active.childNodes.length);
+    const tailContent = tail.extractContents();
+    const hasTail = (tailContent.textContent ?? '').replace(/\u200b/g, '').trim().length > 0;
+    if (hasTail) {
+      const rest = active.cloneNode(false) as HTMLElement;
+      rest.appendChild(tailContent);
+      parent.insertBefore(node, active.nextSibling);
+      parent.insertBefore(rest, node.nextSibling);
+    } else {
+      parent.insertBefore(node, active.nextSibling);
+    }
+  }
+
+  const caret = document.createRange();
+  caret.setStart(node, text.length);
+  caret.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(caret);
+}
+
+/**
  * Toggle one inline tag around the selection, by hand.
  *
  * The title needs this rather than `execCommand('bold')`, and the reason is worth
@@ -958,23 +1031,16 @@ export function runEditorCommand(command: EditorCommand): boolean {
   };
 
   /*
-   * A collapsed caret has nothing to wrap, so these three are toggled as a state
-   * of the keyboard instead of applied to a range.
-   *
-   * The state is the engine's own pending format, set by its own command. That
-   * is the only version that survives the next keystroke: an empty wrapper with
-   * a zero-width carrier in it looks right until the first character, at which
-   * point the browser normalises the empty run and the text lands *outside* it —
-   * plain text, while the button stayed lit because the wrapper was still there.
-   * Using `execCommand` makes the button and the typing one decision: press it
-   * again and the engine turns the format off, so the next character is plain.
+   * Every inline format at a collapsed caret is handled by the editors before
+   * they reach here: they own the "armed for the next character" state, because
+   * the engine does not reliably remember a pending format across a keystroke on
+   * Android. This is the fallback for a direct call — arm an empty wrapper at the
+   * caret, the way {@link toggleTypingStyle} always has.
    */
   const selection = document.getSelection();
   const caretOnly = Boolean(selection && selection.rangeCount > 0 && selection.isCollapsed);
-  if (caretOnly && (command === 'bold' || command === 'italic' || command === 'strike')) {
-    const name = command === 'strike' ? 'strikeThrough' : command;
-    exec(name);
-    return commandState(name);
+  if (caretOnly && (command === 'bold' || command === 'italic' || command === 'strike' || command === 'code')) {
+    return toggleTypingStyle(command);
   }
 
   /**
@@ -1015,37 +1081,42 @@ export function runEditorCommand(command: EditorCommand): boolean {
       if (enclosingTag(range.startContainer, FORMAT_TAGS.code)) {
         return toggleTypingStyle('code');
       }
-      if (!range.collapsed) return toggleInlineElement('code');
-      /*
-       * There is no inline-code command, and an empty wrapper cannot hold a
-       * caret across a keystroke. So the chip is inserted with a word in it and
-       * that word is selected: the first character typed replaces it, inside the
-       * element, and the rest follows the caret.
-       */
-      const chip = document.createElement('code');
-      chip.textContent = 'code';
-      range.insertNode(chip);
-      const around = document.createRange();
-      around.selectNodeContents(chip);
-      selection.removeAllRanges();
-      selection.addRange(around);
-      return true;
+      return toggleInlineElement('code');
     }
     case 'heading': {
-      // A toggle, not an apply: pressing it inside the heading turns the block
-      // back into a paragraph instead of stamping the same heading again.
-      // `currentBlock` is null when the caret is directly in the editable (a
-      // fresh note types into the host until something wraps it), and that is
-      // an apply, not a no-op.
-      const block = currentBlock();
-      return exec('formatBlock', block?.tagName === 'H2' ? 'P' : 'H2');
+      /*
+       * A toggle, not an apply: pressing it inside a heading turns the block back
+       * into a paragraph instead of stamping a second heading. The test covers
+       * every level, because a note can arrive with `#` or `###` from Markdown
+       * and the button has to be able to switch either of them off.
+       *
+       * A quote is demoted first rather than heading-ised in place: `formatBlock`
+       * on a caret inside a `<blockquote>` would put the heading inside the quote,
+       * which is not the block the button claims to have made.
+       */
+      const selection = document.getSelection();
+      if (!selection || selection.rangeCount === 0) return false;
+      const start = selection.getRangeAt(0).startContainer;
+      if (enclosingTag(start, HEADING_TAGS)) return exec('formatBlock', 'P');
+      if (enclosingTag(start, ['BLOCKQUOTE'])) exec('formatBlock', 'P');
+      return exec('formatBlock', 'H2');
     }
     case 'bulletList':
       return makeList('insertUnorderedList');
     case 'orderedList':
       return makeList('insertOrderedList');
-    case 'quote':
+    case 'quote': {
+      // The same toggle shape as Heading, and the one the toolbar was missing:
+      // pressing Quote inside a quote returns the line to a paragraph, rather
+      // than asking `formatBlock` for the blockquote it is already in (a no-op
+      // that left the button lit and the user unable to turn it off).
+      const selection = document.getSelection();
+      if (!selection || selection.rangeCount === 0) return false;
+      const start = selection.getRangeAt(0).startContainer;
+      if (enclosingTag(start, ['BLOCKQUOTE'])) return exec('formatBlock', 'P');
+      if (enclosingTag(start, HEADING_TAGS)) exec('formatBlock', 'P');
       return exec('formatBlock', 'BLOCKQUOTE');
+    }
     case 'checklist':
       return false;
     default:
