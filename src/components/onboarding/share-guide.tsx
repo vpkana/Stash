@@ -42,7 +42,7 @@ export const SHARE_GUIDE_SEEN_KEY = 'onboarding.shareGuide';
  * The repository's releases page rather than a hard-coded asset URL: an APK path
  * changes with every build, and a link that 404s is worse than no link.
  */
-export const ANDROID_DOWNLOAD_URL = 'https://github.com/Redakai-07/Stash/releases';
+export const ANDROID_DOWNLOAD_URL = 'https://github.com/vpkana/Stash/tree/main/released-apks';
 
 export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [step, setStep] = React.useState(0);
