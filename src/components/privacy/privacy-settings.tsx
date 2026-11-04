@@ -7,7 +7,6 @@ import {
   Lock,
   LockKeyhole,
   ShieldCheck,
-  Smartphone,
 } from '@/components/ui/icons';
 import { pluralize } from '@/lib/format';
 import { allLockRoots, isSealed } from '@/lib/privacy/protection';
@@ -17,12 +16,10 @@ import {
   LEGACY_PASSCODE_FIELD_LABEL,
   LEGACY_PASSCODE_HEADLINE,
 } from '@/lib/privacy/legacy-passcode';
-import { screenPrivacySupported } from '@/lib/privacy/screen';
 import { GOOGLE_SYNC_ENABLED } from '@/lib/sync/availability';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { useVaultStore } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Section } from '@/components/ui/page';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
@@ -77,7 +74,6 @@ export function PrivacySettings() {
   const unlockWithLegacyPasscode = usePrivacyStore((state) => state.unlockWithLegacyPasscode);
   const disable = usePrivacyStore((state) => state.disable);
   const update = usePrivacyStore((state) => state.update);
-  const lock = usePrivacyStore((state) => state.lock);
   const unlockWithBiometrics = usePrivacyStore((state) => state.unlockWithBiometrics);
   const grantAll = usePrivacyStore((state) => state.grantAll);
 
@@ -87,27 +83,6 @@ export function PrivacySettings() {
   const [passcode, setPasscode] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [opening, setOpening] = React.useState(false);
-
-  /**
-   * Whether this build can actually block a screenshot.
-   *
-   * Asked once when the screen opens, so the switch can be offered where it works
-   * and *explained* where it does not. A switch that silently does nothing is
-   * worse than no switch: the user would believe their vault is protected from
-   * the one thing — a photograph of the screen — that no amount of encryption can
-   * undo.
-   */
-  const [screenPrivacy, setScreenPrivacy] = React.useState<boolean | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void screenPrivacySupported().then((supported) => {
-      if (!cancelled) setScreenPrivacy(supported);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const devicePath = deviceAuthAvailable && deviceUnlockReady;
 
@@ -516,41 +491,6 @@ function ActionButton({
         {label}
       </Button>
       {hint ? <p className="px-1 pt-1 text-meta leading-relaxed text-subtle">{hint}</p> : null}
-    </div>
-  );
-}
-
-function ToggleRow({
-  icon,
-  label,
-  description,
-  checked,
-  onChange,
-  disabled = false,
-  last = false,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-  disabled?: boolean;
-  last?: boolean;
-}) {
-  return (
-    <div className={cn('flex items-start gap-3 px-4 py-3.5', !last && 'border-b border-border')}>
-      <span className="mt-0.5 shrink-0 text-muted">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <p className="text-row font-medium text-fg">{label}</p>
-        <p className="mt-0.5 text-meta leading-relaxed text-subtle">{description}</p>
-      </div>
-      <Switch
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={onChange}
-        aria-label={label}
-        className="mt-1 shrink-0"
-      />
     </div>
   );
 }

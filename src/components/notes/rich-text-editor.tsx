@@ -212,16 +212,31 @@ export function RichTextEditor({
     const viewport = window.visualViewport;
     if (!viewport) return;
 
+    let expandedHeight = viewport.height;
+
     const ensureCaretVisible = () => {
+      if (document.activeElement !== element) return;
+
+      const height = viewport.height;
+      if (height >= expandedHeight) {
+        expandedHeight = height;
+        return;
+      }
+      // Android also resizes the visual viewport for selection handles and the
+      // copy/cut menu. Those changes are much smaller than the keyboard opening;
+      // ignore them so they cannot move the note and create space above text.
+      if (expandedHeight - height < 120) return;
+
       const selection = document.getSelection();
       if (!selection || selection.rangeCount === 0) return;
       if (!element.contains(selection.anchorNode)) return;
       const range = selection.getRangeAt(0);
+      if (!range.collapsed) return;
       const rect = range.getBoundingClientRect();
       const parent = range.startContainer.parentElement;
       const bottom = rect.height > 0 ? rect.bottom : (parent?.getBoundingClientRect().bottom ?? 0);
-      if (bottom <= viewport.height) return;
-      (parent ?? element).scrollIntoView({ block: 'center' });
+      if (bottom <= height) return;
+      (parent ?? element).scrollIntoView({ block: 'nearest' });
     };
 
     viewport.addEventListener('resize', ensureCaretVisible);
@@ -715,4 +730,3 @@ export function RichTextEditor({
     />
   );
 }
-
