@@ -1,10 +1,9 @@
-import { Home, Library, NotebookPen, Search, Settings, type IconType } from '@/components/ui/icons';
+import { Home, NotebookPen, Search, Settings, type IconType } from '@/components/ui/icons';
 
 /**
  * Primary navigation, in one place.
  *
- * Five destinations, which is the practical limit for a thumb-reachable bar on a
- * phone: Home answers "what did I just save", Library is where structure lives,
+ * Four destinations: Home combines the Inbox, folder structure and recent items;
  * Notes is where the user's own writing lives, Search finds anything, and
  * Settings holds the rare, destructive things.
  *
@@ -23,7 +22,6 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { href: '/', label: 'Home', icon: Home, hint: '' },
-  { href: '/library', label: 'Library', icon: Library, hint: '' },
   { href: '/notes', label: 'Notes', icon: NotebookPen, hint: '' },
   { href: '/search', label: 'Search', icon: Search, hint: '' },
   { href: '/settings', label: 'Settings', icon: Settings, hint: '' },
@@ -36,6 +34,6 @@ export const NAV_ITEMS: NavItem[] = [
  * active at once.
  */
 export function isActiveNav(pathname: string, href: string): boolean {
-  if (href === '/') return pathname === '/';
+  if (href === '/') return pathname === '/' || pathname === '/library';
   return pathname === href || pathname.startsWith(`${href}/`);
 }

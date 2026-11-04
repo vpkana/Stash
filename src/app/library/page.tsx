@@ -37,12 +37,10 @@ import { NoteRow } from '@/components/notes/note-row';
 import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
 
 /**
- * Library: the saved content, one level at a time.
+ * Folder detail: one level of the saved structure at a time.
  *
- * This is the *structure* surface — folders, favourites and tags — as opposed to
- * Home, which is the *recency* surface (what is waiting to be filed, what just
- * landed). They used to show the same summary twice, which gave nobody a reason
- * to open the second one; now each answers a question the other does not.
+ * The top-level folders, favourites and tags live on Home alongside Inbox and
+ * Recent. This route remains for opening and managing a folder's contents.
  *
  * Unlike the capture sheet (which flattens everything for speed), browsing is
  * deliberately level-by-level: it matches how people think about their own
@@ -266,6 +264,10 @@ function LibraryView() {
     ? folderPathLabel(folders, currentFolder.parentId)
     : 'the top level';
 
+  React.useEffect(() => {
+    if (!currentId) router.replace('/');
+  }, [currentId, router]);
+
   /*
    * Everything saved counts, and every row is present — locked ones included.
    *
@@ -284,6 +286,8 @@ function LibraryView() {
     .slice(0, 4);
   const folderCount = folders.length;
 
+  if (!currentId) return null;
+
   /*
    * A protected folder the session has not stepped into renders as a notice, not
    * as a page with its contents blurred out. There is no third state: either the
@@ -295,8 +299,8 @@ function LibraryView() {
       <>
         <PageHeader>
           <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-meta text-subtle">
-            <Link href="/library" className="tap rounded px-1 py-0.5 active:bg-surface-2">
-              Library
+            <Link href="/" className="tap rounded px-1 py-0.5 active:bg-surface-2">
+              Home
             </Link>
             {trail.slice(0, -1).map((folder) => (
               <React.Fragment key={folder.id}>
@@ -332,8 +336,8 @@ function LibraryView() {
             >
               Unlock to open it
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => router.push('/library')}>
-              Back to Library
+            <Button variant="ghost" size="sm" onClick={() => router.push('/')}>
+              Back to Home
             </Button>
           </div>
         </div>
@@ -347,8 +351,8 @@ function LibraryView() {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
             <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-meta text-subtle">
-              <Link href="/library" className="tap rounded px-1 py-0.5 active:bg-surface-2">
-                Library
+              <Link href="/" className="tap rounded px-1 py-0.5 active:bg-surface-2">
+                Home
               </Link>
               {trail.slice(0, -1).map((folder) => (
                 <React.Fragment key={folder.id}>
@@ -432,7 +436,7 @@ function LibraryView() {
                 <button
                   type="button"
                   onClick={() =>
-                    router.push(currentFolder.parentId ? `/library?folder=${currentFolder.parentId}` : '/library')
+                    router.push(currentFolder.parentId ? `/library?folder=${currentFolder.parentId}` : '/')
                   }
                   aria-label="Go up one level"
                   className="tap flex size-10 items-center justify-center rounded-full text-subtle active:bg-surface-2"
@@ -695,7 +699,7 @@ function LibraryView() {
         folder={activeFolder}
         onClose={() => setActiveFolder(null)}
         onDeleted={(folderId) => {
-          if (folderId === currentId) router.push('/library');
+          if (folderId === currentId) router.push('/');
         }}
       />
       <NoteActionsSheet

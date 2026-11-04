@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
  * content becomes a centred column (`column` in `globals.css`), and the tab bar
  * retires.
  *
- * The rail earns its 256px: the mark, the five destinations with room for the
+ * The rail earns its 256px: the mark, the four destinations with room for the
  * second line that says what each one is *for*, and the primary action — which is
  * where a desktop user's pointer already lives. It also gives the app somewhere
  * honest to put the one sentence that matters most about it.
