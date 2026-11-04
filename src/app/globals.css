@@ -713,6 +713,19 @@
     0 14px 30px -10px rgb(15 18 40 / 0.4);
 }
 
+.row-drag-preview {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.row-drag-preview > [data-drag-handle],
+.row-drag-preview > :not(button[class~='flex-1']),
+.row-drag-preview > button[class~='flex-1'] > :nth-child(n + 3),
+.row-drag-preview > button[class~='flex-1'] > span[class~='flex-1'] > :nth-child(n + 2),
+.row-drag-preview > button[class~='flex-1'] > span[class~='flex-1'] > :first-child > :nth-child(n + 2) {
+  display: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .row-drag {
     transition: opacity 140ms ease-out;

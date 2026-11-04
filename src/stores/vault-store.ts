@@ -15,7 +15,6 @@ import type {
   TrashImpact,
 } from '@/db/types';
 import { getSnapshot } from '@/db/repos/vault';
-import { ensureSeeded } from '@/db/seed';
 import { openDatabase } from '@/db';
 import {
   createFolder as createFolderRepo,
@@ -525,7 +524,6 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     try {
       const opened = await openDatabase();
       if (!opened) throw new Error('IndexedDB is unavailable on this device.');
-      await ensureSeeded();
       const data = await loadEverything();
       set({ status: 'ready', error: undefined, ...data, dataVersion: 1 });
     } catch (error) {

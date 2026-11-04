@@ -79,8 +79,8 @@ export const BACKUP_MODES: ReadonlyArray<{ id: BackupMode; label: string; descri
  * These are *preferences*, chosen deliberately and worth carrying to a new
  * device. Device bookkeeping is excluded on purpose:
  *
- *  - `db.schemaInfo` and `db.seeded` are rebuilt on arrival, and importing them
- *    would lie about the schema a database is actually at;
+ *  - `db.schemaInfo` is rebuilt on arrival, and importing it would lie about the
+ *    schema a database is actually at; the legacy `db.seeded` flag is ignored;
  *  - `notes.lastNoteId` and the collapsed/draft UI state are where *this* phone
  *    happened to be looking, which is not something to impose on another one.
  */

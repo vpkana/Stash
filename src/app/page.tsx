@@ -342,34 +342,6 @@ export default function HomePage() {
         </Section>
       ) : null}
 
-      {isEmpty ? (
-        <>
-          <EmptyState
-            icon={<LogoMark size={22} />}
-            title="Nothing saved yet"
-            description="Save a link from any app, or add one with the + button. Your vault stays on this device."
-          />
-          <GroupSurface className="mt-2">
-            <button
-              type="button"
-              onClick={openGuide}
-              className="tap flex w-full items-start gap-3 px-4 py-3.5 text-left active:bg-surface-2"
-            >
-              <span className="tile bg-accent-soft text-accent">
-                <Share2 size={19} strokeWidth={1.9} aria-hidden />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="text-row block font-medium text-fg">Save a link from any app</span>
-                <span className="text-meta mt-0.5 block leading-relaxed text-muted">
-                  Tap Share and choose Stash.
-                </span>
-              </span>
-              <ChevronRight size={16} strokeWidth={2} className="mt-1 shrink-0 text-subtle" aria-hidden />
-            </button>
-          </GroupSurface>
-        </>
-      ) : null}
-
       <LinkActionsSheet
         key={activeLink?.id ?? 'no-link'}
         link={activeLink}

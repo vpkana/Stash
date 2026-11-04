@@ -220,7 +220,6 @@ export const META_KEYS = {
   accent: 'theme.accent',
   recentFolders: 'capture.recentFolders',
   lastFolderId: 'capture.lastFolderId',
-  seeded: 'db.seeded',
   schemaInfo: 'db.schemaInfo',
   /** Remembers the last note the user was reading, so Notes reopens in place. */
   lastNoteId: 'notes.lastNoteId',

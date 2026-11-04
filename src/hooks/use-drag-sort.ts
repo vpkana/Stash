@@ -34,7 +34,9 @@ import {
  *
  * ## What moves
  *
- * The dragged row follows the pointer with a transform at slightly raised opacity.
+ * A visual copy of the dragged row follows the pointer on a top-level layer, so
+ * it remains visible outside the list's clipping boundary. The original keeps its
+ * place as an invisible placeholder while the drag is in flight.
  * The rows between it and the prospective slot slide by exactly one row-height in
  * the opposite direction, so the list **opens the gap where the row will land**:
  * a preview of the result instead of a line drawn across the row it is about to
@@ -270,6 +272,8 @@ export function useDragSort({
   });
 
   const rows = React.useRef(new Map<string, HTMLElement>());
+  /** Visual copy moved independently of the list's overflow clipping. */
+  const dragPreview = React.useRef<HTMLElement | null>(null);
   /** The caller's "move out" target, when it rendered one. */
   const outZone = React.useRef<HTMLElement | null>(null);
   /** The caller's lock target, when it rendered one. */
@@ -288,10 +292,9 @@ export function useDragSort({
    * Geometry captured at the lift.
    *
    * Everything positional is answered from this snapshot rather than from a live
-   * `getBoundingClientRect`, because during a drag two things are transforming:
-   * the dragged row (which follows the pointer) and every row sliding to open the
-   * gap. Measuring mid-drag would feed those transforms back into the decision
-   * that produces them.
+   * `getBoundingClientRect`, because during a drag the preview follows the pointer
+   * and the list rows slide to open the gap. Measuring mid-drag would feed those
+   * transforms back into the decision that produces them.
    */
   const layout = React.useRef<ReadonlyMap<string, RowBox>>(new Map());
   /** The dragged row's own untouched box, used as the origin of its centre. */
@@ -343,6 +346,11 @@ export function useDragSort({
     blockScroll.current = null;
   }, []);
 
+  const removeDragPreview = React.useCallback(() => {
+    dragPreview.current?.remove();
+    dragPreview.current = null;
+  }, []);
+
   const rememberClickGuard = React.useCallback(() => {
     if (clickGuard.current !== null) window.clearTimeout(clickGuard.current);
     clickGuard.current = window.setTimeout(() => {
@@ -367,14 +375,16 @@ export function useDragSort({
       clearTimer();
       clearDwell();
       releaseScrollBlock();
+      removeDragPreview();
       if (clickGuard.current !== null) window.clearTimeout(clickGuard.current);
     },
-    [clearTimer, clearDwell, releaseScrollBlock],
+    [clearTimer, clearDwell, releaseScrollBlock, removeDragPreview],
   );
 
   /** Reset the live drag, leaving the state the renderer reads in sync. */
   const resetLive = React.useCallback(() => {
     clearDwell();
+    removeDragPreview();
     live.current = IDLE;
     startBox.current = null;
     layout.current = new Map();
@@ -387,7 +397,7 @@ export function useDragSort({
       dy: 0,
       height: 0,
     });
-  }, [clearDwell]);
+  }, [clearDwell, removeDragPreview]);
 
   /** The slot the dragged row's centre at `y` would land in. */
   const slotFor = React.useCallback((id: string, y: number): number => {
@@ -415,10 +425,9 @@ export function useDragSort({
    * A destination row rendered by another list, found by hit-testing.
    *
    * Live DOM rather than the frozen geometry, because there is no frozen geometry
-   * for rows this hook did not lay out. The one thing that must be filtered out is
-   * the lifted row itself: it follows the pointer on top of everything, so the
-   * first element at the finger is always the thing being dragged. Asking for
-   * *all* elements at that point and skipping that subtree leaves the row it is
+   * for rows this hook did not lay out. The preview follows the pointer on top of
+   * everything, so the first element at the finger is the item being dragged.
+   * Asking for all elements there and skipping that subtree leaves the row it is
    * covering, which is the one the user means.
    */
   const externalTargetUnder = React.useCallback(
@@ -514,6 +523,27 @@ export function useDragSort({
               blockScroll.current = block;
               document.addEventListener('touchmove', block, { passive: false });
 
+              const rect = element.getBoundingClientRect();
+              const preview = element.cloneNode(true) as HTMLElement;
+              preview.setAttribute('aria-hidden', 'true');
+              preview.setAttribute('inert', '');
+              preview.setAttribute('data-dragging', 'true');
+              preview.classList.add('row-drag', 'row-drag-lifted', 'row-drag-preview');
+              Object.assign(preview.style, {
+                position: 'fixed',
+                top: `${rect.top}px`,
+                left: `${rect.left}px`,
+                width: `${rect.width}px`,
+                height: `${rect.height}px`,
+                boxSizing: 'border-box',
+                margin: '0',
+                pointerEvents: 'none',
+                zIndex: '1000',
+                transform: 'translate3d(0, 0, 0) scale(1.02)',
+              });
+              document.body.appendChild(preview);
+              dragPreview.current = preview;
+
               /*
                * Freeze the geometry here, while every row is still in its resting
                * place: no transform has been committed for this drag yet, so these
@@ -567,6 +597,10 @@ export function useDragSort({
 
           const dy = event.clientY - startY.current;
           live.current.dy = dy;
+          dragPreview.current?.style.setProperty(
+            'transform',
+            `translate3d(${event.clientX - startX.current}px, ${dy}px, 0) scale(1.02)`,
+          );
 
           /*
            * The lock target comes first: it is a destination in its own right, so
@@ -626,9 +660,8 @@ export function useDragSort({
           /*
            * A row under the finger, when the list accepts drops *onto* rows. The
            * answer comes from the frozen boxes for the same reason the slot does:
-           * the row being dragged is carrying a transform, and hit-testing a
-           * moving element would make the target flicker as it follows the
-           * pointer.
+           * the preview follows the pointer and the rows around it are moving,
+           * so hit-testing transformed elements would make the target flicker.
            *
            * With a dwell, a row only becomes a destination once the finger has
            * rested on it: a list that reorders has to keep every pixel of a row
@@ -800,7 +833,7 @@ export function useDragSort({
         'data-drop-target-kind': noun,
         'data-drag-preview': shift < 0 ? 'up' : shift > 0 ? 'down' : 'none',
         style: isDragged
-          ? { transform: `translate3d(0, ${state.dy}px, 0) scale(1.02)`, zIndex: 6 }
+          ? { opacity: 0, transform: 'none', transition: 'none' }
           : shift !== 0
             ? { transform: `translate3d(0, ${shift}px, 0)` }
             : {},
@@ -830,7 +863,6 @@ export function useDragSort({
       shifts,
       slotFor,
       state.draggingId,
-      state.dy,
       state.targetId,
     ],
   );

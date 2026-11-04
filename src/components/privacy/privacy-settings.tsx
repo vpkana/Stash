@@ -392,33 +392,25 @@ export function PrivacySettings() {
       {keyringPresent ? (
         <>
 
-          <Section title="If you cannot unlock" className="pb-10">
+          <Section title="" className="pb-10">
             <div className="mx-4 rounded-2xl border border-danger/30 bg-danger-soft p-4">
               <p className="flex items-center gap-2 text-row font-semibold text-danger">
                 <AlertTriangle size={17} strokeWidth={2} aria-hidden />
-                If this device cannot unlock it
+                Unlock Every Lock in this app
               </p>
               <p className="mt-1.5 text-meta leading-relaxed text-fg/85">
-                There is no password to fall back on: the key that decrypts a locked item exists only in this
-                device&apos;s secure storage, behind the system prompt. Wipe the phone, lose it, or restore your
-                vault onto a new one without a recovery key, and those items stay unreadable there — everything
-                else keeps working normally, and nothing is deleted.
+                Locked items need this device&apos;s secure storage. Without it or a recovery key, they can&apos;t be
+                opened on another device.
               </p>
               {GOOGLE_SYNC_ENABLED ? (
                 <p className="mt-2 text-meta leading-relaxed text-fg/85">
-                  If you use Google Drive sync, set up a recovery key{' '}
-                  <span className="font-medium text-fg">before</span> you need it, in Settings → Google Drive sync.
-                  It is shown once, only you hold it, and a copy wrapped by it sits in your own Drive. Stash cannot
-                  use it for you and cannot reset it. Entering it installs the vault key on another device — or
-                  re-registers the unlock prompt after a Windows Hello reset — and opening a locked folder there
-                  still asks for that device&apos;s own prompt.
+                  Set up a recovery key in Google Drive sync before you need it. Keep it safe; Stash can&apos;t
+                  recover it.
                 </p>
               ) : null}
               <p className="mt-2 text-meta leading-relaxed text-fg/85">
-                Removing every lock below asks for your device prompt, then opens everything: no folder, note or
-                link stays locked, and nothing is blanked or deleted. If an item was locked with a key this device
-                does not have — one that arrived in somebody else&apos;s backup — it stays locked, and the app tells
-                you how many.
+                Remove locks from items this device can unlock. Content stays unchanged; items encrypted with
+                another key remain locked.
               </p>
               {mode === 'remove-all' ? (
                 <div className="mt-3">

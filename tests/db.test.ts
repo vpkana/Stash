@@ -1,7 +1,6 @@
 import Dexie from 'dexie';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { META_KEYS, StashDatabase, openDatabase, db, type ExportBundle } from '@/db';
-import { ensureSeeded } from '@/db/seed';
+import { StashDatabase, openDatabase, db, type ExportBundle } from '@/db';
 import {
   createFolder,
   deleteFolder,
@@ -23,6 +22,7 @@ import {
 import { exportVault, getSnapshot, importVault, isValidBundle } from '@/db/repos/vault';
 import { getRecentFolderIds, pruneRecentFolders, pushRecentFolder } from '@/db/repos/settings';
 import { setLinkTags, tagsForLink } from '@/db/repos/tags';
+import { useVaultStore } from '@/stores/vault-store';
 
 /**
  * These run against a real Dexie database backed by fake-indexeddb, so
@@ -52,20 +52,11 @@ describe('boot and persistence', () => {
     expect(db.isOpen()).toBe(true);
   });
 
-  it('seeds starter folders exactly once', async () => {
-    expect(await ensureSeeded()).toBe(true);
-    const first = await listFolders();
-    expect(first.length).toBeGreaterThan(0);
-
-    // A second boot must not duplicate the starters.
-    expect(await ensureSeeded()).toBe(false);
-    expect(await listFolders()).toHaveLength(first.length);
-  });
-
-  it('keeps the seeded flag in the meta table', async () => {
-    await ensureSeeded();
-    const row = await db.meta.get(META_KEYS.seeded);
-    expect(row?.value).toBe(true);
+  it('does not create starter folders when the vault initializes', async () => {
+    useVaultStore.setState({ status: 'booting' });
+    await useVaultStore.getState().initialize();
+    expect(useVaultStore.getState().folders).toEqual([]);
+    useVaultStore.setState({ status: 'booting' });
   });
 
   it('survives a close and reopen without losing data', async () => {
@@ -303,7 +294,6 @@ describe('capture destinations', () => {
 
 describe('export and import', () => {
   it('produces a self-describing bundle', async () => {
-    await ensureSeeded();
     await createLink({ url: 'https://example.com/a', folderId: null, title: 'A' });
     const bundle = await exportVault();
     expect(bundle.format).toBe('stash-export');
