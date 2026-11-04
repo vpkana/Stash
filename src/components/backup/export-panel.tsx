@@ -75,7 +75,7 @@ export function ExportPanel() {
   return (
     <>
       <div className="mx-4 flex flex-col gap-3">
-        <Button variant="primary" className="justify-start" onClick={() => setOpen(true)} disabled={busy}>
+        <Button variant="accentSoft" className="justify-start" onClick={() => setOpen(true)} disabled={busy}>
           {busy ? (
             <Loader2 size={18} strokeWidth={1.9} className="animate-spin" aria-hidden />
           ) : (
