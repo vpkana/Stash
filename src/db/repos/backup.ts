@@ -109,6 +109,10 @@ export async function getPortableSettings(): Promise<PortableSettings> {
   return {
     themeMode: theme === 'light' || theme === 'dark' || theme === 'system' ? theme : 'system',
     relockPolicy: isPolicy(policy) ? policy : DEFAULT_PRIVACY_SETTINGS.relockPolicy,
+    sessionEndPolicy:
+      (privacy as { sessionEndPolicy?: unknown } | null)?.sessionEndPolicy === 'tab-change'
+        ? 'tab-change'
+        : 'app-close',
     lockApp: (privacy as { lockApp?: unknown } | null)?.lockApp !== false,
     secureScreen: (privacy as { secureScreen?: unknown } | null)?.secureScreen === true,
     biometric: (privacy as { biometric?: unknown } | null)?.biometric !== false,
@@ -519,6 +523,7 @@ function portableMetaRows(
     ...current,
     enabled: current.enabled || installingKeyring,
     relockPolicy: settings.relockPolicy,
+    sessionEndPolicy: settings.sessionEndPolicy,
     lockApp: settings.lockApp,
     secureScreen: settings.secureScreen,
     biometric: settings.biometric,

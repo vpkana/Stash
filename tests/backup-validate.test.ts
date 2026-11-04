@@ -415,6 +415,23 @@ describe('migrating older backups', () => {
     expect(result.data.settings.themeMode).toBe('system');
   });
 
+  it('defaults the unlock duration to app-close for older and invalid backups', () => {
+    const olderSettings = { ...sampleData().settings };
+    Reflect.deleteProperty(olderSettings, 'sessionEndPolicy');
+    const older = expectReady(documentText({ data: { ...sampleData(), settings: olderSettings } }));
+    expect(older.data.settings.sessionEndPolicy).toBe('app-close');
+
+    const invalid = expectReady(
+      documentText({
+        data: {
+          ...sampleData(),
+          settings: { ...sampleData().settings, sessionEndPolicy: 'unknown' },
+        },
+      }),
+    );
+    expect(invalid.data.settings.sessionEndPolicy).toBe('app-close');
+  });
+
   it('applies the same reference checks to an old file as to a new one', () => {
     const legacy = {
       format: 'stash-export',

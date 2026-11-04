@@ -7,6 +7,7 @@ import type {
   NoteLink,
   RelockPolicy,
   SavedLink,
+  SessionEndPolicy,
   Tag,
 } from '@/db/types';
 
@@ -87,6 +88,7 @@ export const BACKUP_MODES: ReadonlyArray<{ id: BackupMode; label: string; descri
 export interface PortableSettings {
   themeMode: 'light' | 'dark' | 'system';
   relockPolicy: RelockPolicy;
+  sessionEndPolicy: SessionEndPolicy;
   lockApp: boolean;
   secureScreen: boolean;
   biometric: boolean;

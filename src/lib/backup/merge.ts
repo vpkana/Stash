@@ -761,6 +761,7 @@ function hasNonDefaultSettings(settings: PortableSettings): boolean {
   return (
     settings.themeMode !== 'system' ||
     settings.relockPolicy !== 'immediate' ||
+    settings.sessionEndPolicy !== 'app-close' ||
     settings.lockApp !== true ||
     settings.secureScreen !== false ||
     settings.biometric !== true ||

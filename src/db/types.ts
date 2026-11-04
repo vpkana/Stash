@@ -263,6 +263,8 @@ export const SECURITY_KEYS = {
  */
 export type RelockPolicy = 'immediate' | '1m' | '5m' | '15m';
 
+export type SessionEndPolicy = 'tab-change' | 'app-close';
+
 export interface PrivacySettings {
   /** True once a keyring exists, i.e. locking content is possible at all. */
   enabled: boolean;
@@ -271,6 +273,8 @@ export interface PrivacySettings {
    * {@link RelockPolicy}.
    */
   relockPolicy: RelockPolicy;
+  /** When to end an unlocked session. */
+  sessionEndPolicy: SessionEndPolicy;
   /**
    * Legacy only. This used to mean "show a lock screen over the whole app while
    * locked", which is no longer a thing Stash does: there is no app password and
@@ -312,6 +316,7 @@ export interface PrivacySettings {
 export const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
   enabled: false,
   relockPolicy: 'immediate',
+  sessionEndPolicy: 'app-close',
   lockApp: true,
   secureScreen: false,
   biometric: true,

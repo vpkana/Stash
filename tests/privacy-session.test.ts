@@ -137,6 +137,7 @@ describe('defaults', () => {
     // want. The two legacy fields are still written and still read, but nothing
     // decides anything from them any more.
     expect(DEFAULT_PRIVACY_SETTINGS.relockPolicy).toBe('immediate');
+    expect(DEFAULT_PRIVACY_SETTINGS.sessionEndPolicy).toBe('app-close');
     expect(DEFAULT_PRIVACY_SETTINGS.lockApp).toBe(true);
     expect(DEFAULT_PRIVACY_SETTINGS.enabled).toBe(false);
     expect(DEFAULT_PRIVACY_SETTINGS.secureScreen).toBe(false);

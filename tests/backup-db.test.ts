@@ -606,6 +606,7 @@ describe('the portable preferences', () => {
     await setMeta(META_KEYS.privacySettings, {
       enabled: false,
       relockPolicy: '5m',
+      sessionEndPolicy: 'tab-change',
       lockApp: false,
       secureScreen: true,
       biometric: false,
@@ -623,6 +624,7 @@ describe('the portable preferences', () => {
     expect(await getRecentFolderIds()).toEqual([welcome]);
     const privacy = await getPrivacySettings();
     expect(privacy.relockPolicy).toBe('5m');
+    expect(privacy.sessionEndPolicy).toBe('tab-change');
     expect(privacy.lockApp).toBe(false);
     expect(privacy.secureScreen).toBe(true);
     expect(privacy.biometric).toBe(false);

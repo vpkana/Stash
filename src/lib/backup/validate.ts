@@ -99,6 +99,7 @@ export type ParseResult =
 export const DEFAULT_PORTABLE_SETTINGS: PortableSettings = {
   themeMode: 'system',
   relockPolicy: 'immediate',
+  sessionEndPolicy: 'app-close',
   lockApp: true,
   secureScreen: false,
   biometric: true,
@@ -460,6 +461,9 @@ function settingsFromMeta(meta: unknown): PortableSettings {
       case 'privacy.settings':
         if (isPlainObject(value)) {
           if (isRelockPolicy(value.relockPolicy)) settings.relockPolicy = value.relockPolicy;
+          if (value.sessionEndPolicy === 'tab-change' || value.sessionEndPolicy === 'app-close') {
+            settings.sessionEndPolicy = value.sessionEndPolicy;
+          }
           if (typeof value.lockApp === 'boolean') settings.lockApp = value.lockApp;
           if (typeof value.secureScreen === 'boolean') settings.secureScreen = value.secureScreen;
           if (typeof value.biometric === 'boolean') settings.biometric = value.biometric;
@@ -827,6 +831,10 @@ function readSettings(value: unknown, repairs: string[]): PortableSettings {
     // An unrecognised policy degrades to the *strictest* one. Guessing "15m" for
     // a value written by a newer build would quietly weaken a device's lock.
     relockPolicy: isRelockPolicy(policy) ? (policy as RelockPolicy) : DEFAULT_PORTABLE_SETTINGS.relockPolicy,
+    sessionEndPolicy:
+      value.sessionEndPolicy === 'tab-change' || value.sessionEndPolicy === 'app-close'
+        ? value.sessionEndPolicy
+        : DEFAULT_PORTABLE_SETTINGS.sessionEndPolicy,
     lockApp: typeof value.lockApp === 'boolean' ? value.lockApp : DEFAULT_PORTABLE_SETTINGS.lockApp,
     secureScreen: typeof value.secureScreen === 'boolean' ? value.secureScreen : DEFAULT_PORTABLE_SETTINGS.secureScreen,
     biometric: typeof value.biometric === 'boolean' ? value.biometric : DEFAULT_PORTABLE_SETTINGS.biometric,

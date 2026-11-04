@@ -1072,6 +1072,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
 
   lockOnTabChange: (now = Date.now()) => {
     const state = get();
+    if (state.settings.sessionEndPolicy === 'app-close') return;
     // Nothing to end when there is no keyring (nothing is protected) and nothing
     // has been opened. The reveal grace is what keeps an unlock and the
     // navigation it caused from cancelling each other out.
@@ -1080,22 +1081,10 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     get().lock();
   },
 
-  /**
-   * Leaving the foreground ends the session.
-   *
-   * This is what "the user locked the phone or the computer" looks like from
-   * inside the app, and it is the whole point of unlocking per session: the same
-   * person picking the phone back up has to pass the prompt again.
-   *
-   * The lock happens here rather than on resume because Android may kill the
-   * process while it is backgrounded — a promise kept only on resume is one the
-   * app was never alive to keep.
-   *
-   * `relockPolicy` is deliberately ignored: it exists so a vault written by an
-   * earlier build still loads, not to make this decision any more.
-   */
+  /** Backgrounding ends a tab-change session, but not an app-close session. */
   handleBackground: (now = Date.now()) => {
     const state = get();
+    if (state.settings.sessionEndPolicy === 'app-close') return;
     if (!state.unlocked && state.grantedRoots.length === 0) return;
     set({ backgroundedAt: now });
     get().lock();
@@ -1103,6 +1092,7 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
 
   handleForeground: (now = Date.now()) => {
     const state = get();
+    if (state.settings.sessionEndPolicy === 'app-close') return false;
     if (!state.unlocked || state.backgroundedAt === null) return false;
     if (!shouldRelock(state.settings.relockPolicy, state.backgroundedAt, now)) {
       set({ backgroundedAt: null });

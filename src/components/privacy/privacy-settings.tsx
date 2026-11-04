@@ -211,12 +211,49 @@ export function PrivacySettings() {
                   : 'Turn this on, then lock any folder, note or link you want kept private. Its contents are encrypted at rest and open one item at a time.'}
               </p>
               {keyringPresent ? (
-                <p className="mt-1.5 text-meta leading-relaxed text-subtle">
-                  A protected folder’s contents are encrypted at rest and withheld until you ask for them:
-                  opening the folder asks {promptName} for your unlock, and passing it opens that folder only.
-                  Opening Stash, browsing, searching and saving links never ask for anything. Access ends when
-                  you switch tabs or leave Stash.
-                </p>
+                <>
+                  <p className="mt-1.5 text-meta leading-relaxed text-subtle">
+                    A protected folder’s contents are encrypted at rest and withheld until you ask for them:
+                    opening the folder asks {promptName} for your unlock, and passing it opens that folder only.
+                    Opening Stash, browsing, searching and saving links never ask for anything.
+                  </p>
+                  <div role="radiogroup" aria-label="Keep unlocked" className="mt-3 grid gap-2">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.sessionEndPolicy === 'tab-change'}
+                      onClick={() => void update({ sessionEndPolicy: 'tab-change' })}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-2.5 text-left transition-colors',
+                        settings.sessionEndPolicy === 'tab-change'
+                          ? 'border-accent bg-accent-soft'
+                          : 'border-border bg-surface-2',
+                      )}
+                    >
+                      <span className="block text-row font-medium text-fg">Until you change tabs</span>
+                      <span className="mt-0.5 block text-meta leading-relaxed text-subtle">
+                        Locks when you switch sections or leave Stash.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.sessionEndPolicy === 'app-close'}
+                      onClick={() => void update({ sessionEndPolicy: 'app-close' })}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-2.5 text-left transition-colors',
+                        settings.sessionEndPolicy === 'app-close'
+                          ? 'border-accent bg-accent-soft'
+                          : 'border-border bg-surface-2',
+                      )}
+                    >
+                      <span className="block text-row font-medium text-fg">Until you close Stash</span>
+                      <span className="mt-0.5 block text-meta leading-relaxed text-subtle">
+                        Stays unlocked across tabs and in the background. Locks when Stash restarts.
+                      </span>
+                    </button>
+                  </div>
+                </>
               ) : null}
               {unlocked && unreadable > 0 ? (
                 <p className="mt-1.5 text-meta leading-relaxed text-warning">
@@ -225,11 +262,11 @@ export function PrivacySettings() {
                 </p>
               ) : null}
             </div>
-            {keyringPresent && unlocked && !legacyPasscodeOnly ? (
+            {/* {keyringPresent && unlocked && !legacyPasscodeOnly ? (
               <Button variant="surface" size="sm" onClick={() => lock()}>
                 Lock now
               </Button>
-            ) : null}
+            ) : null} */}
           </div>
 
           {/*

@@ -537,7 +537,7 @@ describe('session', () => {
 
     // A vault configured by an earlier build, back when this was a choice. The
     // row is still read; it no longer decides anything.
-    await usePrivacyStore.getState().update({ relockPolicy: '15m' });
+    await usePrivacyStore.getState().update({ relockPolicy: '15m', sessionEndPolicy: 'tab-change' });
 
     // Locking the phone is the case the whole feature exists for, so a quick app
     // switch does not keep the key: it is dropped here, not on the way back in.
@@ -552,18 +552,21 @@ describe('session', () => {
     expect(usePrivacyStore.getState().unlocked).toBe(false);
   });
 
-  it('locks the moment it is backgrounded under the default policy', async () => {
+  it('keeps the session open while Stash is in the background by default', async () => {
     await enableLegacyPasscodeVault();
     expect(usePrivacyStore.getState().settings.relockPolicy).toBe('immediate');
+    expect(usePrivacyStore.getState().settings.sessionEndPolicy).toBe('app-close');
 
     usePrivacyStore.getState().handleBackground();
-    expect(usePrivacyStore.getState().unlocked).toBe(false);
-    // Locking drops the key rather than flagging it: nothing can decrypt now.
-    expect(isSessionLocked()).toBe(true);
+    expect(usePrivacyStore.getState().unlocked).toBe(true);
+    expect(isSessionLocked()).toBe(false);
+    expect(usePrivacyStore.getState().handleForeground()).toBe(false);
+    expect(usePrivacyStore.getState().unlocked).toBe(true);
   });
 
   it('ends the session on the next tab change, but not on the navigation a reveal caused', async () => {
     await enableLegacyPasscodeVault();
+    await usePrivacyStore.getState().update({ sessionEndPolicy: 'tab-change' });
     const opened = 1_700_000_000_000;
     usePrivacyStore.setState({ unlockedAt: opened });
 
@@ -576,6 +579,16 @@ describe('session', () => {
     usePrivacyStore.getState().lockOnTabChange(opened + 5_000);
     expect(usePrivacyStore.getState().unlocked).toBe(false);
     expect(isSessionLocked()).toBe(true);
+  });
+
+  it('keeps an unlocked session across tab changes when set to last until close', async () => {
+    await enableLegacyPasscodeVault();
+    const opened = 1_700_000_000_000;
+    usePrivacyStore.setState({ unlockedAt: opened });
+
+    usePrivacyStore.getState().lockOnTabChange(opened + 60_000);
+    expect(usePrivacyStore.getState().unlocked).toBe(true);
+    expect(isSessionLocked()).toBe(false);
   });
 
   it('does nothing on a tab change when the session is already locked or unprotected', () => {
@@ -1350,6 +1363,7 @@ describe('schema and settings', () => {
     expect(defaults).toEqual({
       enabled: false,
       relockPolicy: 'immediate',
+      sessionEndPolicy: 'app-close',
       lockApp: true,
       secureScreen: false,
       biometric: true,
@@ -1358,9 +1372,15 @@ describe('schema and settings', () => {
       primaryUnlock: 'device',
     });
 
-    await setPrivacySettings({ relockPolicy: '15m', secureScreen: true, primaryUnlock: 'passcode' });
+    await setPrivacySettings({
+      relockPolicy: '15m',
+      sessionEndPolicy: 'tab-change',
+      secureScreen: true,
+      primaryUnlock: 'passcode',
+    });
     expect(await getPrivacySettings()).toMatchObject({
       relockPolicy: '15m',
+      sessionEndPolicy: 'tab-change',
       secureScreen: true,
       primaryUnlock: 'passcode',
     });
@@ -1369,6 +1389,7 @@ describe('schema and settings', () => {
     await db.meta.put({ key: 'privacy.settings', value: { relockPolicy: 'nonsense' } });
     const recovered = await getPrivacySettings();
     expect(recovered.relockPolicy).toBe('immediate');
+    expect(recovered.sessionEndPolicy).toBe('app-close');
     expect(recovered.primaryUnlock).toBe('device');
 
     // A row written before the field existed must not point the gate at a way in

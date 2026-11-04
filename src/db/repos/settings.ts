@@ -145,6 +145,7 @@ export async function getPrivacySettings(): Promise<PrivacySettings> {
   return {
     enabled: stored.enabled === true,
     relockPolicy: policy,
+    sessionEndPolicy: stored.sessionEndPolicy === 'tab-change' ? 'tab-change' : 'app-close',
     lockApp: stored.lockApp !== false,
     secureScreen: stored.secureScreen === true,
     biometric: stored.biometric !== false,

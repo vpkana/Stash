@@ -81,6 +81,7 @@ export function note(
 export const DEFAULT_SETTINGS: PortableSettings = {
   themeMode: 'system',
   relockPolicy: 'immediate',
+  sessionEndPolicy: 'app-close',
   lockApp: true,
   secureScreen: false,
   biometric: true,

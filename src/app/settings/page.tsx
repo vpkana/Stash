@@ -136,7 +136,7 @@ export default function SettingsPage() {
   return (
     <>
       <PageHeader>
-        <PageTitle subtitle="Local-first, synced only if you ask">Settings</PageTitle>
+        <PageTitle subtitle="Local-first, Sync to Google is in development mode">Settings</PageTitle>
       </PageHeader>
 
       <Section title="Appearance">
