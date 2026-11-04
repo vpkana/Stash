@@ -307,7 +307,7 @@ function LibraryView() {
                 <ChevronRight size={12} strokeWidth={2.2} className="shrink-0 text-subtle" aria-hidden />
                 <Link
                   href={`/library?folder=${folder.id}`}
-                  className="tap max-w-[7rem] truncate rounded px-1 py-0.5 active:bg-surface-2"
+                  className="tap max-w-28 truncate rounded px-1 py-0.5 active:bg-surface-2"
                 >
                   {folder.name}
                 </Link>
@@ -359,7 +359,7 @@ function LibraryView() {
                   <ChevronRight size={12} strokeWidth={2.2} className="shrink-0 text-subtle" aria-hidden />
                   <Link
                     href={`/library?folder=${folder.id}`}
-                    className="tap max-w-[7rem] truncate rounded px-1 py-0.5 active:bg-surface-2"
+                    className="tap max-w-28 truncate rounded px-1 py-0.5 active:bg-surface-2"
                   >
                     {folder.name}
                   </Link>

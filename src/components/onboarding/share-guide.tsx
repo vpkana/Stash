@@ -103,7 +103,7 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
         </SheetHeader>
 
         <SheetBody>
-          <div className="flex min-h-[16.5rem] items-center justify-center px-2 pb-4">{current.art}</div>
+          <div className="flex min-h-66 items-center justify-center px-2 pb-4">{current.art}</div>
 
           {/* Step dots, as a position and not as navigation: three steps are
               short enough to read in order, and a dot that jumps skips the one
@@ -170,7 +170,7 @@ export function ShareGuide({ open, onClose }: { open: boolean; onClose: () => vo
 function PhoneFrame({ children, caption }: { children: React.ReactNode; caption: string }) {
   return (
     <figure className="m-0 flex flex-col items-center gap-2.5">
-      <div className="w-[13.5rem] rounded-[1.9rem] border-[6px] border-border bg-surface-2 p-1 shadow-card">
+      <div className="w-54 rounded-[1.9rem] border-[6px] border-border bg-surface-2 p-1 shadow-card">
         <div className="relative overflow-hidden rounded-[1.4rem] bg-surface">
           <div className="mx-auto mt-1.5 h-1 w-8 rounded-full bg-border" aria-hidden />
           <div className="px-2 pb-2 pt-2.5">{children}</div>
