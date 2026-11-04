@@ -14,8 +14,7 @@ import { LinkRow } from '@/components/links/link-row';
 import { LinkActionsSheet } from '@/components/links/link-actions-sheet';
 import { NoteRow } from '@/components/notes/note-row';
 import { NoteActionsSheet } from '@/components/notes/note-actions-sheet';
-import { ShareGuide, SHARE_GUIDE_SEEN_KEY } from '@/components/onboarding/share-guide';
-import { getMeta, setMeta } from '@/db/repos/settings';
+import { useOnboardingStore } from '@/stores/onboarding-store';
 
 /**
  * Home is the *recency* surface, not a second Library.
@@ -38,10 +37,9 @@ export default function HomePage() {
   const toggleLinkFavorite = useVaultStore((state) => state.toggleLinkFavorite);
   const markLinkOpened = useVaultStore((state) => state.markLinkOpened);
 
-  const status = useVaultStore((state) => state.status);
   const [activeLink, setActiveLink] = React.useState<SavedLink | null>(null);
   const [activeNote, setActiveNote] = React.useState<Note | null>(null);
-  const [guideOpen, setGuideOpen] = React.useState(false);
+  const openGuide = useOnboardingStore((state) => state.openGuide);
 
   /**
    * What just landed, newest first.
@@ -86,32 +84,7 @@ export default function HomePage() {
   }, [allNotes]);
   const openNote = React.useCallback((id: string) => router.push(`/notes?note=${id}`), [router]);
 
-  const closeGuide = React.useCallback(() => {
-    setGuideOpen(false);
-    void setMeta(SHARE_GUIDE_SEEN_KEY, true);
-  }, []);
   const isEmpty = links.length === 0 && folders.length === 0 && allNotes.length === 0;
-
-  /**
-   * The share guide opens itself once, before the first link is saved.
-   *
-   * "First run" is measured by the absence of links, not by an empty vault: the
-   * first boot seeds a handful of starter folders, so an empty-vault test would
-   * never fire on the install it is meant for. A vault that already has links is
-   * not new, and the guide stays out of its way — the settings row is there for
-   * anyone who dismissed it or is curious later. The flag in `meta` travels with
-   * an export and survives a restart.
-   */
-  React.useEffect(() => {
-    if (status !== 'ready' || links.length > 0) return;
-    let cancelled = false;
-    void getMeta<boolean>(SHARE_GUIDE_SEEN_KEY, false).then((seen) => {
-      if (!cancelled && !seen) setGuideOpen(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [status, links.length]);
 
   const openLink = React.useCallback(
     (link: SavedLink) => {
@@ -191,7 +164,7 @@ export default function HomePage() {
           <GroupSurface className="mt-2">
             <button
               type="button"
-              onClick={() => setGuideOpen(true)}
+              onClick={openGuide}
               className="tap flex w-full items-start gap-3 px-4 py-3.5 text-left active:bg-surface-2"
             >
               <span className="tile bg-accent-soft text-accent">
@@ -337,7 +310,6 @@ export default function HomePage() {
         onClose={() => setActiveNote(null)}
         onOpenNote={openNote}
       />
-      <ShareGuide open={guideOpen} onClose={closeGuide} />
     </>
   );
 }

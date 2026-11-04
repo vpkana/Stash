@@ -27,6 +27,14 @@ export interface ReconcileReport {
    * and the next reconciliation with a key will seal them.
    */
   deferred: number;
+  /**
+   * Rows that stay ciphertext after an attempt to open them, because the key in
+   * hand is not the one they were sealed with — the shape a backup from another
+   * device arrives in. Counted rather than thrown: one unreadable row must not
+   * stop the rest of the vault from being opened, and it must not be reported as
+   * successfully opened either.
+   */
+  unreadable: number;
 }
 
 function emptyReport(): ReconcileReport {
@@ -34,6 +42,7 @@ function emptyReport(): ReconcileReport {
     sealed: { folders: 0, notes: 0, links: 0 },
     opened: { folders: 0, notes: 0, links: 0 },
     deferred: 0,
+    unreadable: 0,
   };
 }
 
@@ -65,6 +74,29 @@ export async function reconcileProtection(): Promise<ReconcileReport> {
     return true;
   };
 
+  /**
+   * Open one row, or count it as unreadable and leave it exactly as it is.
+   *
+   * The one row that cannot be decrypted here is one sealed with another
+   * device's key. Before this guard the decryption error rejected the whole
+   * reconciliation, so the writes already queued could land while the rest of
+   * the vault was never settled — and the unreadable row itself was left sealed
+   * with no record of why.
+   */
+  const openOrKeep = async <T extends { enc?: unknown }>(
+    row: T,
+    open: (value: T, key: CryptoKey) => Promise<T>,
+  ): Promise<T> => {
+    if (!key) return row;
+    try {
+      return await open(row, key);
+    } catch (error) {
+      report.unreadable += 1;
+      console.warn('[stash] a sealed record could not be opened by this device’s key', error);
+      return row;
+    }
+  };
+
   /*
    * Folders are never sealed.
    *
@@ -80,19 +112,22 @@ export async function reconcileProtection(): Promise<ReconcileReport> {
    */
   for (const folder of folders) {
     if (!settle(false, isSealed(folder), 'folders')) continue;
-    writes.push(db.folders.put(await openFolder(folder, key)));
+    if (!key) continue;
+    writes.push(db.folders.put(await openOrKeep(folder, openFolder)));
   }
 
   for (const note of notes) {
     const target = protection.notes.has(note.id);
     if (!settle(target, isSealed(note), 'notes')) continue;
-    writes.push(db.notes.put(target ? await sealNote(note, key) : await openNote(note, key)));
+    if (!key) continue;
+    writes.push(db.notes.put(target ? await sealNote(note, key) : await openOrKeep(note, openNote)));
   }
 
   for (const link of links) {
     const target = protection.links.has(link.id);
     if (!settle(target, isSealed(link), 'links')) continue;
-    writes.push(db.links.put(target ? await sealLink(link, key) : await openLink(link, key)));
+    if (!key) continue;
+    writes.push(db.links.put(target ? await sealLink(link, key) : await openOrKeep(link, openLink)));
   }
 
   await Promise.all(writes);
@@ -100,8 +135,12 @@ export async function reconcileProtection(): Promise<ReconcileReport> {
 }
 
 /**
- * Open every sealed row. Only used when the user turns privacy off, which cannot
- * happen without the key (the gate blocks it), so `deferred` should always be 0.
+ * Open every sealed row that this vault's key can open.
+ *
+ * Used when the user removes the locks, which cannot happen without the key (the
+ * gate blocks it), so `deferred` should always be 0. `unreadable` is the honest
+ * exception: a row that arrived from another device's backup is sealed under a
+ * key nobody here holds, and it stays ciphertext rather than aborting the rest.
  */
 export async function unsealEverything(): Promise<ReconcileReport> {
   const key = getVaultKey();
@@ -117,21 +156,62 @@ export async function unsealEverything(): Promise<ReconcileReport> {
     db.links.toArray(),
   ]);
 
+  /*
+   * Opening is attempted per row rather than row by row with a hard failure.
+   *
+   * A vault can hold a row sealed with a key this device does not have — a
+   * backup imported from another device brings exactly that — and one such row
+   * must not stop the other rows from being released, nor be counted as opened.
+   * It stays ciphertext, is reported through `unreadable`, and every caller that
+   * cares (turning locking off, the no-screen-lock policy) reads that count.
+   */
+  const unreadable = (error: unknown): void => {
+    report.unreadable += 1;
+    console.warn('[stash] a sealed record could not be opened by this device’s key', error);
+  };
+
   const writes: Array<Promise<unknown>> = [];
   for (const folder of folders) {
     if (!isSealed(folder)) continue;
-    report.opened.folders += 1;
-    writes.push(db.folders.put(await openFolder(folder, key)));
+    try {
+      const opened = await openFolder(folder, key);
+      if (isSealed(opened)) {
+        unreadable(new Error('the row is still sealed after opening'));
+        continue;
+      }
+      report.opened.folders += 1;
+      writes.push(db.folders.put(opened));
+    } catch (error) {
+      unreadable(error);
+    }
   }
   for (const note of notes) {
     if (!isSealed(note)) continue;
-    report.opened.notes += 1;
-    writes.push(db.notes.put(await openNote(note, key)));
+    try {
+      const opened = await openNote(note, key);
+      if (isSealed(opened)) {
+        unreadable(new Error('the row is still sealed after opening'));
+        continue;
+      }
+      report.opened.notes += 1;
+      writes.push(db.notes.put(opened));
+    } catch (error) {
+      unreadable(error);
+    }
   }
   for (const link of links) {
     if (!isSealed(link)) continue;
-    report.opened.links += 1;
-    writes.push(db.links.put(await openLink(link, key)));
+    try {
+      const opened = await openLink(link, key);
+      if (isSealed(opened)) {
+        unreadable(new Error('the row is still sealed after opening'));
+        continue;
+      }
+      report.opened.links += 1;
+      writes.push(db.links.put(opened));
+    } catch (error) {
+      unreadable(error);
+    }
   }
 
   await Promise.all(writes);

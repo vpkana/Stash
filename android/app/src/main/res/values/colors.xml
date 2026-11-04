@@ -23,7 +23,7 @@
         Deliberately *not* duplicated into `values-night/`: the icon is the same
         object in both themes.
     -->
-    <color name="brand_ink">#1B1A4D</color>
+    <color name="brand_ink">#1F1E50</color>
     <color name="brand_cream">#FFFFFF</color>
 
 </resources>

@@ -4,26 +4,24 @@
 
     A vector rather than a bitmap because the launcher draws this at sizes from
     48dp to 192dp and a PNG only looks right at the density it was rendered for.
-    The geometry is the same path as `public/icons/foreground.svg`, scaled into
-    the 108-unit adaptive canvas.
+    The geometry is the same traced path as `public/icons/foreground.svg`,
+    scaled into the 108-unit adaptive canvas.
 
-    The scale is 0.22, and that number is the fix for an icon that was drawn too
-    large. Android masks an adaptive icon to whatever shape the launcher uses, and
-    the region guaranteed to survive every one of those shapes is a 66-unit circle
-    centred on the 108-unit canvas. At the old `0.27637` the ribbon's box was
-    40.5 by 63.0 units — a half-diagonal of 41.3 against a safe radius of 33 — so
-    its bottom tips fell outside the circle and a round mask sliced them off. At
-    `0.22` the box is 40.5 by 50.2 units, half-diagonal 32.3, comfortably inside,
-    and the mark occupies 46% of the canvas, which is the proportion Google's own
-    adaptive icons use.
+    Android masks an adaptive icon to whatever shape the launcher uses, and the
+    region guaranteed to survive every one of those shapes is a 66-unit circle
+    centred on the 108-unit canvas. At `0.145` the mark's box is 37.5 by 49.7
+    units, a half-diagonal of 31.1 against a safe radius of 33, so no mask clips
+    it, and the mark occupies 46% of the canvas, which is the proportion Google's
+    own adaptive icons use.
 
-    The colour is `brand_cream`, the same value as the `brand.cream` custom
-    property in `src/app/globals.css`; the tile behind it is `brand_ink`. The icon
-    is the one surface that is the same in light and dark mode, so neither value
-    changes between the day and night resource sets.
+    The mark is two pieces: a kept ribbon whose fold is the letter S, with the S
+    cut between them. The colour is the icon's white; the tile behind it is the
+    ink background layer. The icon is the one surface that is the same in light
+    and dark mode, so neither value changes between the day and night resource
+    sets.
 
     Note for editors: this is an XML comment, so a doubled hyphen cannot appear
-    inside it. Writing a CSS custom property out in full here will not compile.
+    inside it.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -31,16 +29,15 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateX="54"
-        android:translateY="53.6"
-        android:scaleX="0.22"
-        android:scaleY="0.22">
-        <group
-            android:translateX="-256"
-            android:translateY="-254">
+        android:scaleX="0.145"
+        android:scaleY="0.145"
+        android:translateX="16.48"
+        android:translateY="15.43">
             <path
                 android:fillColor="#FFFFFF"
-                android:pathData="M 204 140 H 308 Q 348 140 348 180 V 352 Q 348 368 336 368 L 268 322 Q 256 317 244 322 L 176 368 Q 164 368 164 352 V 180 Q 164 140 204 140 Z" />
-        </group>
+                android:pathData="M 274 191.5 L 279 191.5 L 282 192.5 L 290.5 199.5 L 367.5 276 L 377 288.5 L 382.5 299 L 386.5 311.5 L 388 322 L 388 426 L 386.5 430.5 L 382.5 435 L 379 437 L 369 437 L 271 372.5 L 263.5 370 L 256 370 L 249.5 371.5 L 241.5 376 L 151.5 435.5 L 147 437.5 L 140.5 437.5 L 136.5 436 L 132 432 L 129.5 426 L 129.5 208 L 246 326 L 254.5 331.5 L 262 334.5 L 272 336.5 L 284 336 L 293 333.5 L 301 329.5 L 306.5 325.5 L 313.5 318 L 318.5 309 L 320.5 303 L 322 295.5 L 322 286 L 319 273.5 L 311.5 260.5 L 264 212.5 L 262.5 209 L 263 200.5 L 264.5 197.5 L 268 194 L 274 191.5 Z" />
+            <path
+                android:fillColor="#FFFFFF"
+                android:pathData="M 169 94.5 L 348 94.5 L 358.5 97.5 L 367.5 102.5 L 374.5 108.5 L 380 115.5 L 384.5 124 L 387.5 134.5 L 388 250.5 L 309 172.5 L 303.5 168 L 293.5 162.5 L 281 159.5 L 271 159.5 L 259 162.5 L 247 169.5 L 240 176.5 L 236.5 181.5 L 234 186 L 231 195 L 230 201 L 230 209 L 231 215.5 L 233.5 223 L 240.5 234.5 L 287 281.5 L 289 285 L 290 288.5 L 289.5 294 L 287.5 298.5 L 284 302 L 279 304 L 272.5 304 L 266.5 301 L 155.5 188 L 146.5 177 L 138.5 163 L 135 153 L 133 141 L 133 129.5 L 136 118 L 141.5 109.5 L 149.5 102.5 L 160 97 L 169 94.5 Z" />
     </group>
 </vector>

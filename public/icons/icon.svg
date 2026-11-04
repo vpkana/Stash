@@ -1,25 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Stash">
   <!--
-    The Stash mark: a kept ribbon.
+    The Stash icon: a kept ribbon on ink, with its long shadow.
 
-    One idea, drawn once — a bookmark whose notch is a soft curve rather than a
-    sharp V. It says what the app is for (things you mean to keep), it survives
-    being 16px wide, and it is a single flat shape, so it needs no second colour,
-    no gradient and no shadow to read.
+    One idea, drawn once — a bookmark folded over itself, the fold forming an S.
+    It says what the app is for (things you mean to keep) and survives 16px. The
+    tile is ink, the mark is paper white, and the diagonal is the fold's shadow;
+    no gradient and no second colour, so it reads at any size.
 
-    Geometry is deliberate and worth keeping:
-      ribbon   184 × 228 units, centred on (256, 254)
-      scale    1.22  ->  the mark fills 54% of the tile, which is the proportion
-                       that looks correct both as a rounded launcher tile and
-                       inside Android's adaptive-icon safe zone
-      corner   40 units at the top, 12 at the bottom tips: soft, but not a pill
-      notch    51 units deep (22% of the height) with a curved apex
+    Generated from the master artwork by tracing its silhouette, so the launcher
+    icon, the PWA icon and the in-app tile are all the same shape.
   -->
-  <rect width="512" height="512" rx="116" fill="#1B1A4D" />
-  <g transform="translate(256 254) scale(1.22) translate(-256 -254)">
-    <path
-      d="M 204 140 H 308 Q 348 140 348 180 V 352 Q 348 368 336 368 L 268 322 Q 256 317 244 322 L 176 368 Q 164 368 164 352 V 180 Q 164 140 204 140 Z"
-      fill="#FFFFFF"
-    />
+  <defs>
+    <clipPath id="tile"><rect width="512" height="512" rx="104"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="104" fill="#1F1E50"/>
+  <g clip-path="url(#tile)">
+    <path d="M 0 0 L 295 0 L 512 217 L 512 512 L 0 512 Z" fill="#16183E"/>
+    <path d="M 274 191.5 L 279 191.5 L 282 192.5 L 290.5 199.5 L 367.5 276 L 377 288.5 L 382.5 299 L 386.5 311.5 L 388 322 L 388 426 L 386.5 430.5 L 382.5 435 L 379 437 L 369 437 L 271 372.5 L 263.5 370 L 256 370 L 249.5 371.5 L 241.5 376 L 151.5 435.5 L 147 437.5 L 140.5 437.5 L 136.5 436 L 132 432 L 129.5 426 L 129.5 208 L 246 326 L 254.5 331.5 L 262 334.5 L 272 336.5 L 284 336 L 293 333.5 L 301 329.5 L 306.5 325.5 L 313.5 318 L 318.5 309 L 320.5 303 L 322 295.5 L 322 286 L 319 273.5 L 311.5 260.5 L 264 212.5 L 262.5 209 L 263 200.5 L 264.5 197.5 L 268 194 L 274 191.5 Z" fill="#FFFFFF"/><path d="M 169 94.5 L 348 94.5 L 358.5 97.5 L 367.5 102.5 L 374.5 108.5 L 380 115.5 L 384.5 124 L 387.5 134.5 L 388 250.5 L 309 172.5 L 303.5 168 L 293.5 162.5 L 281 159.5 L 271 159.5 L 259 162.5 L 247 169.5 L 240 176.5 L 236.5 181.5 L 234 186 L 231 195 L 230 201 L 230 209 L 231 215.5 L 233.5 223 L 240.5 234.5 L 287 281.5 L 289 285 L 290 288.5 L 289.5 294 L 287.5 298.5 L 284 302 L 279 304 L 272.5 304 L 266.5 301 L 155.5 188 L 146.5 177 L 138.5 163 L 135 153 L 133 141 L 133 129.5 L 136 118 L 141.5 109.5 L 149.5 102.5 L 160 97 L 169 94.5 Z" fill="#FFFFFF"/>
   </g>
 </svg>

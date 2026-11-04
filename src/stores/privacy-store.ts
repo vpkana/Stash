@@ -241,10 +241,17 @@ export interface PrivacyState {
   /**
    * End locking: opens every sealed row, then removes the keyring.
    *
-   * A change to the vault, so the caller must have authorised it. Distinct from
-   * `abandonLock`, and the distinction is the whole point: this one preserves the
-   * content and removes the protection, while that one removes the protection by
-   * destroying the content.
+   * This is what the "Remove the lock" action runs, and what it promises is the
+   * whole point of the action: every locked folder, note and link becomes ordinary
+   * content again, keeping its address, title, place and timestamps. Nothing is
+   * blanked and nothing is deleted. A change to the vault, so the caller must
+   * have authorised it first.
+   *
+   * The one honest exception is a row sealed with a key this device does not hold
+   * — an item imported from another device's backup. There is nothing here that
+   * can open it, so it stays locked and the result says how many. That is the
+   * opposite of the old behaviour, which destroyed the keyring and left those rows
+   * unreadable *and* blank on screen.
    */
   disable: () => Promise<ActionResult>;
   /**
@@ -876,27 +883,44 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
     set({ busy: true, message: null });
 
     /*
-     * Verify first: turning locking off opens everything, and that must not be
+     * Verify first: removing every lock opens everything, and that must not be
      * something a passer-by can trigger on an unlocked phone. There is no path
      * where this is a single unauthenticated tap.
      */
-    const authorised = await get().authorize('Turn off locking for your Stash vault');
+    const authorised = await get().authorize('Remove every lock from your Stash vault');
     if (!authorised.ok) {
       set({ busy: false, message: authorised.message ?? null });
       return authorised;
     }
 
-    // Open every sealed row before the keyring goes, so nothing is left
-    // ciphertext with no key in existence — and clear the flags only after that,
-    // for the same reason the removal policy does.
-    const released = await releaseEveryLock();
-    if (!released) {
-      const message = 'Some locked items could not be opened, so nothing was changed.';
-      set({ busy: false, message });
-      return { ok: false, message };
-    }
+    /*
+     * Open, then clear, then drop the key.
+     *
+     * Unsealing has to come first: a cleared lock flag pointing at ciphertext is
+     * a row that is neither protected nor readable. And because the key is still
+     * present while this happens, a row this device *can* open is genuinely
+     * decrypted back into the clear — which is what makes "remove the lock" open
+     * the content instead of hiding it.
+     */
+    const unsealed = await unsealEverything();
+    await clearEveryLock();
+    await destroyKeyring();
     const settings = await setPrivacySettings({ enabled: false, biometric: false });
 
+    /*
+     * Rows that were sealed under another device's key cannot be opened here.
+     * They stay ciphertext, still visible as locked rows, and are reported rather
+     * than quietly dropped — the one outcome this action must never produce is
+     * links that look gone because their address could not be restored.
+     */
+    const unreadable = unsealed.unreadable;
+    const warning =
+      unreadable > 0
+        ? `${unreadable} item(s) were locked with a key this device does not have, so their content could not be recovered. Everything else is unlocked and readable.`
+        : null;
+
+    // A fresh array for the vault subscription: rows that were withheld a moment
+    // ago are ordinary content now, and every listing has to be told.
     set({
       busy: false,
       settings,
@@ -907,10 +931,19 @@ export const usePrivacyStore = create<PrivacyState>((set, get) => ({
       unlockedAt: null,
       grantedRoots: [],
       deviceUnlockReady: false,
-      message: null,
+      revealRequest: null,
+      message: warning,
     });
     syncScreenPrivacy(settings.secureScreen, true);
-    return { ok: true };
+
+    // Re-derive the lock state from the flags that are left (there are none) so
+    // the database and the vault mirror agree immediately, not on the next write.
+    await get().reconcile();
+
+    // `ok` answers "did every lock open": when a row could not be opened the
+    // caller must not report a clean success, even though the locks are gone and
+    // the rest of the vault is readable.
+    return warning ? { ok: false, message: warning } : { ok: true };
   },
 
   requestAccess: async ({ kind, id, root }) => {

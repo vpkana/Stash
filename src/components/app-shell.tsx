@@ -7,12 +7,15 @@ import { SidebarNav } from './sidebar-nav';
 import { PrimaryActionButton } from './primary-action';
 import { AndroidBack } from './android-back';
 import { CaptureSheet } from './capture/capture-sheet';
+import { ShareGuide } from './onboarding/share-guide';
 import { LockGate } from './privacy/lock-gate';
 import { NoScreenLockNotice } from './privacy/no-screen-lock-notice';
 import { Toaster } from './ui/toast';
 import { useCaptureStore } from '@/stores/capture-store';
 import { useEditorStore } from '@/stores/editor-store';
+import { useOnboardingStore } from '@/stores/onboarding-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
+import { useVaultStore } from '@/stores/vault-store';
 
 /**
  * The top-level section a route belongs to.
@@ -51,6 +54,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const captureMode = useCaptureStore((state) => state.mode);
   const pathname = usePathname() ?? '/';
   const lockOnTabChange = usePrivacyStore((state) => state.lockOnTabChange);
+  const vaultStatus = useVaultStore((state) => state.status);
+  const startFirstRun = useOnboardingStore((state) => state.startFirstRun);
+  const guideOpen = useOnboardingStore((state) => state.guideOpen);
+  const closeGuide = useOnboardingStore((state) => state.closeGuide);
+
+  /*
+   * The first-run question is asked here, not on Home.
+   *
+   * A cold start can land on any route — a share, a restored page — and Home is
+   * merely the common one. Asking from the shell means the guide appears on the
+   * first launch whatever opened, and waiting for the capture sheet to be idle
+   * means an incoming share is never buried under it.
+   */
+  React.useEffect(() => {
+    if (vaultStatus !== 'ready' || captureStatus !== 'idle') return;
+    void startFirstRun();
+  }, [vaultStatus, captureStatus, startFirstRun]);
 
   /*
    * An unlock lasts for the session, and the session is the tab.
@@ -98,6 +118,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {shareTakeover || noteOpen ? null : <BottomNav />}
       <CaptureSheet />
+      {/* Above the capture sheet and the chrome: it explains the share flow, and
+          it is mounted once for the whole app rather than per screen. */}
+      <ShareGuide open={guideOpen} onClose={closeGuide} />
       <Toaster />
       {/* Registered once, above every screen: the hardware back button. */}
       <AndroidBack />

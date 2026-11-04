@@ -192,7 +192,7 @@ export async function buildBackup(options: {
     const key = getVaultKey();
     const opened = await openEverything(data, key);
     if (!opened.ok) return { ok: false, message: opened.message };
-    data = opened.data;
+    data = unlockedCopy(opened.data);
     // Nothing in this file is sealed any more, so a key for it would be
     // meaningless at best and a liability at worst.
     includeKeyring = false;
@@ -240,6 +240,27 @@ export async function buildBackup(options: {
     fileName: backupFileName(),
     text: JSON.stringify(backup, null, 2),
     backup,
+  };
+}
+
+/**
+ * The file as a plain copy of the vault: readable, and with no locks in it.
+ *
+ * This is what "everything readable" promises, and the lock flags go with the
+ * ciphertext. A readable file that still carried `isLocked: true` would restore as
+ * a vault of locked items, which is neither what the file says it is nor what the
+ * person exporting it was told: the lock is a property of *this* vault, and an
+ * imported copy has to be locked again deliberately. Keeping the flag would also
+ * invite reconciliation to re-seal rows in a vault whose only key may be gone.
+ */
+function unlockedCopy(data: BackupData): BackupData {
+  const unlock = <T extends { isLocked: boolean }>(row: T): T =>
+    row.isLocked ? { ...row, isLocked: false } : row;
+  return {
+    ...data,
+    folders: data.folders.map(unlock),
+    links: data.links.map(unlock),
+    notes: data.notes.map(unlock),
   };
 }
 

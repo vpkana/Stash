@@ -1,13 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { AlertTriangle, Download, Loader2, ShieldCheck } from '@/components/ui/icons';
-import { BACKUP_MODES, type BackupMode } from '@/lib/backup/format';
+import { AlertTriangle, Download, Loader2 } from '@/components/ui/icons';
 import { useBackupStore } from '@/stores/backup-store';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { useVaultStore } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
   Sheet,
   SheetBody,
@@ -18,24 +16,29 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { toast } from '@/components/ui/toast';
-import { cn } from '@/lib/utils';
+import { ConfirmAuth } from '@/components/privacy/confirm-auth';
 
 /**
  * Exporting the vault.
  *
- * The choice of modes lives in a sheet rather than on the settings page. It is
- * one decision with three answers, made once, and spelling all three out inline
- * made the page look like a form that had to be filled in before anything could
- * be exported. The button is the start of the flow; the sheet is the flow.
+ * There is one kind of backup now: a complete, readable copy of everything. That
+ * is a deliberate narrowing. The old sheet offered three modes, and the default —
+ * "locked items stay encrypted" — wrote a file whose locked rows were sealed
+ * under a key that never travelled with it (a device keyring has no passcode wrap
+ * to hand over). Restoring that file produced rows nothing on the new device could
+ * ever decrypt, which read as links that had vanished.
  *
- * The mode picker is still the honest part. All three modes produce a complete
- * backup; they differ only in what happens to *locked* content, and the
- * consequence of each is spelled out underneath rather than left to be inferred
- * from a label. Nothing here is a hidden default: the choice is the user's, and
- * it is made with the trade-off in front of them.
+ * So the file is the vault in the clear, and the consequences are stated on the
+ * screen that produces it:
+ *
+ *  - if locking is set up, the device prompt comes first, because this file
+ *    exposes exactly what the lock exists to withhold;
+ *  - the warning says the file is readable and that a re-import arrives unlocked,
+ *    so the locks have to be put back by hand.
+ *
+ * The import side still accepts every mode an older build could have written.
+ * This changes what Stash writes, not what it can read.
  */
-
-const MIN_PASSPHRASE = 8;
 
 export function ExportPanel() {
   const exportVault = useBackupStore((state) => state.exportVault);
@@ -45,62 +48,29 @@ export function ExportPanel() {
   const message = useBackupStore((state) => state.message);
 
   const protection = useVaultStore((state) => state.protection);
-  const unlocked = usePrivacyStore((state) => state.unlocked);
   const keyringPresent = usePrivacyStore((state) => state.keyringPresent);
 
   const [open, setOpen] = React.useState(false);
-  const [mode, setMode] = React.useState<BackupMode>('sealed');
-  const [passphrase, setPassphrase] = React.useState('');
-  const [confirmation, setConfirmation] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
 
   const lockedCount = protection.folders.size + protection.notes.size + protection.links.size;
-  const needsPassphrase = mode === 'encrypted';
-  const plaintextNeedsUnlock = mode === 'plaintext' && keyringPresent && !unlocked;
+  const needsAuth = keyringPresent;
 
-  /**
-   * Leave the sheet and forget the passphrase.
-   *
-   * The passphrase has done its job once the file is written, and there is no
-   * reason for it to sit in a text field — or in React's state — for the rest of
-   * the session.
-   */
   const close = () => {
     setOpen(false);
-    setPassphrase('');
-    setConfirmation('');
     setError(null);
   };
 
   const run = async () => {
     setError(null);
-
-    if (needsPassphrase) {
-      if (passphrase.length < MIN_PASSPHRASE) {
-        setError(`Use at least ${MIN_PASSPHRASE} characters. This passphrase is the only way back into the file.`);
-        return;
-      }
-      if (passphrase !== confirmation) {
-        setError('The two passphrases do not match.');
-        return;
-      }
-    }
-
-    const ok = await exportVault({ mode, passphrase: needsPassphrase ? passphrase : undefined });
-
-    setPassphrase('');
-    setConfirmation('');
-
+    const ok = await exportVault({ mode: 'plaintext' });
     if (ok) {
       toast('Backup ready', { tone: 'success' });
       setOpen(false);
-      setError(null);
-    } else if (message) {
-      toast(message, { tone: 'danger' });
+    } else {
+      setError(message ?? 'The backup could not be created.');
     }
   };
-
-  const chosen = BACKUP_MODES.find((option) => option.id === mode);
 
   return (
     <>
@@ -114,8 +84,8 @@ export function ExportPanel() {
           Export a backup
         </Button>
         <p className="px-1 text-meta leading-relaxed text-subtle">
-          A complete copy of this vault, created on this device and handed to the share sheet so you choose where
-          it goes. You decide how locked items are handled in the next step.
+          A complete, readable copy of this vault, created on this device and handed to the share sheet so you
+          choose where it goes.
         </p>
 
         {exportedName && !busy ? (
@@ -139,122 +109,66 @@ export function ExportPanel() {
           <SheetHeader>
             <SheetTitle>Export a backup</SheetTitle>
             <SheetDescription>
-              Every mode writes everything you have. The difference is what happens to locked items in the file.
+              One complete file: every folder, note and link you have, with nothing left encrypted inside it.
             </SheetDescription>
           </SheetHeader>
 
           <SheetBody>
             <div className="flex flex-col gap-3 pb-3">
-              <div className="card" role="radiogroup" aria-label="Backup type">
-                {BACKUP_MODES.map((option, index) => {
-                  const active = option.id === mode;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      onClick={() => {
-                        setMode(option.id);
-                        setError(null);
-                      }}
-                      className={cn(
-                        'tap flex w-full items-start gap-3 px-4 py-3 text-left',
-                        index > 0 && 'border-t border-border',
-                        active ? 'bg-accent-soft' : 'active:bg-surface-2',
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2',
-                          active ? 'border-accent' : 'border-border-strong',
-                        )}
-                        aria-hidden
-                      >
-                        {active ? <span className="h-2.5 w-2.5 rounded-full bg-accent" /> : null}
-                      </span>
-                      <span className="min-w-0">
-                        <span className={cn('block text-row font-medium', active ? 'text-accent' : 'text-fg')}>
-                          {option.label}
-                        </span>
-                        <span className="mt-0.5 block text-meta leading-relaxed text-muted">
-                          {option.description}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
+              <div className="rounded-2xl border border-warning/40 bg-surface-2 p-4">
+                <p className="flex items-start gap-2 text-meta font-semibold text-fg">
+                  <AlertTriangle size={15} strokeWidth={2.2} className="mt-0.5 shrink-0 text-warning" aria-hidden />
+                  The exported file contains all the details in unlocked format
+                </p>
+                <p className="mt-1.5 text-meta leading-relaxed text-muted">
+                  Your {lockedCount > 0 ? `${lockedCount} locked item(s) and ` : ''}everything else are written in
+                  readable form — links, addresses, notes, titles and folder names. Anyone who gets this file reads
+                  all of it, so keep it somewhere you trust.
+                </p>
+                <p className="mt-1.5 text-meta leading-relaxed text-muted">
+                  Because the file is unlocked, importing it again gives you an unlocked vault: you will need to
+                  lock those folders, notes and links again afterwards.
+                </p>
               </div>
 
-              {needsPassphrase ? (
-                <div className="flex flex-col gap-2">
-                  <Input
-                    type="password"
-                    value={passphrase}
-                    onChange={(event) => setPassphrase(event.target.value)}
-                    placeholder="Passphrase for this file"
-                    autoComplete="new-password"
-                    aria-label="Backup passphrase"
-                  />
-                  <Input
-                    type="password"
-                    value={confirmation}
-                    onChange={(event) => setConfirmation(event.target.value)}
-                    placeholder="Type it again"
-                    autoComplete="new-password"
-                    aria-label="Confirm backup passphrase"
-                  />
-                  <p className="px-1 text-meta leading-relaxed text-subtle">
-                    This passphrase protects the file itself, and nothing else. There is no recovery code: if it is
-                    lost, the file cannot be opened again — not by you, and not by Stash.
-                  </p>
-                </div>
-              ) : null}
-
-              {chosen?.id === 'sealed' && lockedCount > 0 ? (
-                <p className="flex items-start gap-2 px-1 text-meta leading-relaxed text-subtle">
-                  <ShieldCheck size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
-                  {lockedCount} locked item(s) stay encrypted in the file. A vault that still carries a passcode
-                  wrap travels with it, so a restore can open them; a vault locked with the device prompt alone has
-                  no key to hand over, and those items can only be opened on the device that wrote this file.
-                </p>
-              ) : null}
-
-              {chosen?.id === 'plaintext' && lockedCount > 0 ? (
-                <p className="flex items-start gap-2 px-1 text-meta leading-relaxed text-danger">
-                  <AlertTriangle size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
-                  Everything readable means exactly that: your {lockedCount} locked item(s) are written out in plain
-                  text. Anyone who gets this file reads all of it.
-                </p>
-              ) : null}
-
-              {plaintextNeedsUnlock ? (
-                <p className="px-1 text-meta leading-relaxed text-danger">
-                  Unlock Stash first. A fully readable export has to open every locked item, and it will not write a
-                  file that claims to be readable while hiding parts of it.
+              {needsAuth ? (
+                <p className="px-1 text-meta leading-relaxed text-subtle">
+                  Locking is set up on this device, so your fingerprint, face, PIN or pattern is asked for before
+                  the file is written.
                 </p>
               ) : null}
 
               {error ? <p className="px-1 text-meta leading-relaxed text-danger">{error}</p> : null}
-              {message && !busy ? <p className="px-1 text-meta leading-relaxed text-danger">{message}</p> : null}
             </div>
           </SheetBody>
 
           <SheetFooter>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={close} disabled={busy}>
-                Cancel
-              </Button>
-              <div className="flex-1" />
-              <Button variant="primary" disabled={busy || plaintextNeedsUnlock} onClick={() => void run()}>
-                {busy ? (
-                  <Loader2 size={18} strokeWidth={1.9} className="animate-spin" aria-hidden />
-                ) : (
-                  <Download size={18} strokeWidth={1.9} aria-hidden />
-                )}
-                {busy ? 'Preparing…' : 'Create backup'}
-              </Button>
-            </div>
+            {needsAuth ? (
+              <div className="flex w-full flex-col">
+                <ConfirmAuth
+                  reason="Export your Stash vault in readable form"
+                  confirmLabel="Create the backup"
+                  onAuthorized={run}
+                  onCancel={close}
+                  disabled={busy}
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" onClick={close} disabled={busy}>
+                  Cancel
+                </Button>
+                <div className="flex-1" />
+                <Button variant="primary" disabled={busy} onClick={() => void run()}>
+                  {busy ? (
+                    <Loader2 size={18} strokeWidth={1.9} className="animate-spin" aria-hidden />
+                  ) : (
+                    <Download size={18} strokeWidth={1.9} aria-hidden />
+                  )}
+                  {busy ? 'Preparing…' : 'Create backup'}
+                </Button>
+              </div>
+            )}
           </SheetFooter>
         </SheetContent>
       </Sheet>

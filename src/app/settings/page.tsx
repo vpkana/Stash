@@ -22,9 +22,11 @@ import { SyncSettings } from '@/components/sync/sync-settings';
 import { useSyncStore } from '@/stores/sync-store';
 import { ConfirmAuth } from '@/components/privacy/confirm-auth';
 import { ExportPanel } from '@/components/backup/export-panel';
-import { ANDROID_DOWNLOAD_URL, ShareGuide } from '@/components/onboarding/share-guide';
+import { ANDROID_DOWNLOAD_URL } from '@/components/onboarding/share-guide';
+import { useOnboardingStore } from '@/stores/onboarding-store';
 import { openExternal } from '@/lib/open-external';
 import { ImportFlow } from '@/components/backup/import-flow';
+import { GOOGLE_SYNC_ENABLED } from '@/lib/sync/availability';
 import { pluralize } from '@/lib/format';
 import { useVaultStore } from '@/stores/vault-store';
 import { useBackupStore } from '@/stores/backup-store';
@@ -66,7 +68,7 @@ export default function SettingsPage() {
   const syncing = useSyncStore((state) => state.syncing);
 
   const [busy, setBusy] = React.useState(false);
-  const [guideOpen, setGuideOpen] = React.useState(false);
+  const openGuide = useOnboardingStore((state) => state.openGuide);
   const [confirmErase, setConfirmErase] = React.useState(false);
   /*
    * Both irreversible entries below are behind a proof of identity before the
@@ -208,7 +210,12 @@ export default function SettingsPage() {
 
       <PrivacySettings />
 
-      <SyncSettings />
+      {/*
+        Sync is built but not offered yet — see `lib/sync/availability.ts`. The
+        section is hidden rather than removed so the engine, its tests and the
+        existing connections stay intact for when it comes back.
+      */}
+      {GOOGLE_SYNC_ENABLED ? <SyncSettings /> : null}
 
       <Section title="Saving from other apps">
         {/*
@@ -219,7 +226,7 @@ export default function SettingsPage() {
         <div className="mx-4 flex flex-col gap-2">
           <button
             type="button"
-            onClick={() => setGuideOpen(true)}
+            onClick={openGuide}
             className="tap flex items-center gap-3 rounded-2xl border border-hairline bg-surface px-4 py-3.5 text-left active:bg-surface-2"
           >
             <Share2 size={18} strokeWidth={1.9} className="shrink-0 text-muted" aria-hidden />
@@ -297,9 +304,9 @@ export default function SettingsPage() {
         </div>
         <p className="flex items-start gap-2 px-5 pt-2.5 text-meta leading-relaxed text-subtle">
           <Shield size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
-          Stash has no server. Your vault lives on this device and works exactly the same in airplane mode. If
-          you turn on Google Drive sync, a copy also lives in your own Drive’s private app-data folder — and
-          only while you keep it connected.
+          {GOOGLE_SYNC_ENABLED
+            ? 'Stash has no server. Your vault lives on this device and works exactly the same in airplane mode. If you turn on Google Drive sync, a copy also lives in your own Drive’s private app-data folder — and only while you keep it connected.'
+            : 'Stash has no server. Your vault lives on this device only, and works exactly the same in airplane mode. Nothing is uploaded anywhere; the backup file is the way to move a copy to another device.'}
         </p>
       </Section>
 
@@ -320,8 +327,8 @@ export default function SettingsPage() {
                 onCancel={() => setImportAuthorising(false)}
                 hint={
                   <>
-                    Restoring writes into this vault, so it asks first. <span className="font-medium text-fg">Exporting
-                    never asks</span> — taking your own data out is always available.
+                    Restoring writes into this vault, so it asks first. Exporting asks too when locking is set up —
+                    the backup file is written fully readable.
                   </>
                 }
               />
@@ -402,7 +409,6 @@ export default function SettingsPage() {
       {/* Mounted once for the whole page: the flow is driven by the store, so it
           appears and disappears with the import rather than with a button. */}
       <ImportFlow />
-      <ShareGuide open={guideOpen} onClose={() => setGuideOpen(false)} />
     </>
   );
 }

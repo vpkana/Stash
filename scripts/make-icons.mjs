@@ -7,6 +7,7 @@
  *   public/icons/icon.svg        the rounded tile        -> web, PWA, legacy launcher
  *   public/icons/maskable.svg    full-bleed background   -> PWA maskable
  *   public/icons/foreground.svg  mark only, transparent  -> Android adaptive icon
+ *                                                        -> Android splash bitmaps
  *
  * Rasterising is a build step rather than a design step: a PNG that was drawn by
  * hand drifts from the master the moment the master is edited, and a launcher
@@ -71,6 +72,45 @@ for (const [bucket, scale] of DENSITIES) {
   written.push(await render(TILE, Math.round(48 * scale), `${dir}/ic_launcher.png`));
   written.push(await render(TILE, Math.round(48 * scale), `${dir}/ic_launcher_round.png`, { round: true }));
   written.push(await render(FOREGROUND, Math.round(108 * scale), `${dir}/ic_launcher_foreground.png`));
+}
+
+/*
+ * Android's legacy splash bitmaps (pre-API 31). The theme paints the window
+ * background itself, so these are only reached by a launcher or plugin that asks
+ * for the drawable directly — but they are still derived from the master rather
+ * than drawn separately: the mark, in the tile's ink, centred on the app's own
+ * light background.
+ */
+const SPLASH_BACKGROUND = '#F6F7FB';
+const SPLASHES = [
+  ['drawable', 480, 320],
+  ['drawable-land-mdpi', 480, 320],
+  ['drawable-land-hdpi', 800, 480],
+  ['drawable-land-xhdpi', 1280, 720],
+  ['drawable-land-xxhdpi', 1600, 960],
+  ['drawable-land-xxxhdpi', 1920, 1280],
+  ['drawable-port-mdpi', 320, 480],
+  ['drawable-port-hdpi', 480, 800],
+  ['drawable-port-xhdpi', 720, 1280],
+  ['drawable-port-xxhdpi', 960, 1600],
+  ['drawable-port-xxxhdpi', 1280, 1920],
+];
+const SPLASH_MARK = Buffer.from(FOREGROUND.toString('utf8').replaceAll('#FFFFFF', '#1F1E50'));
+
+for (const [dir, width, height] of SPLASHES) {
+  const edge = Math.round(Math.min(width, height) * 0.24);
+  /*
+   * `foreground.svg` draws the mark at 40% of its canvas — the adaptive-icon safe
+   * zone. The splash has no launcher mask to dodge, so the canvas is scaled up by
+   * that same factor and the mark ends up exactly `edge` tall.
+   */
+  const canvas = Math.round(edge * 2.5);
+  const mark = await sharp(SPLASH_MARK, { density: 512 }).resize(canvas, canvas).png().toBuffer();
+  await sharp({ create: { width, height, channels: 3, background: SPLASH_BACKGROUND } })
+    .composite([{ input: mark, gravity: 'center' }])
+    .png({ compressionLevel: 9 })
+    .toFile(path.join(root, `android/app/src/main/res/${dir}/splash.png`));
+  written.push(`android/app/src/main/res/${dir}/splash.png`);
 }
 
 // The point of running this is to see what it wrote.

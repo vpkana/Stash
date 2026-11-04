@@ -70,11 +70,14 @@ one: above `lg` the primary action lives in the rail.
 
 ### The mark
 
-**A kept ribbon:** a bookmark whose notch is a soft curve rather than a sharp V,
-in white on a deep indigo tile (`brand_cream` on `brand_ink`). It says what the
-app is for — things you mean to keep — and it is one flat shape, so it reads at
-16px in a tab bar and at 192px on a home screen with no second colour, no
-gradient and no shadow.
+**A kept ribbon folded into an S:** a bookmark whose fold is the letter S, in
+white on a deep indigo tile (`brand_cream` on `brand_ink`). It says what the app
+is for — things you mean to keep — and the fold does the work of a wordmark without
+being one. The mark itself is two flat pieces with the S cut between them, so it
+reads at 16px in a tab bar and at 192px on a home screen with no gradient in the
+mark. The icon adds one extra plane — a diagonal of shade (`#16183E`) across the
+tile, the fold's shadow — and that plane exists only in the icon, never in the
+interface.
 
 Rules:
 

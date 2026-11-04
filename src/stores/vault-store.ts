@@ -85,6 +85,7 @@ import {
   computeProtection,
   hiddenIds,
   emptyHidden,
+  isSealed,
   redactLink,
   redactNote,
   type HiddenIds,
@@ -327,6 +328,40 @@ function tagUsageOf(tags: readonly Tag[], linkTags: readonly LinkTag[]): Array<{
 }
 
 /**
+ * Add every row that is still ciphertext to the withheld sets.
+ *
+ * A row can be sealed and yet not be openable here: it arrived from another
+ * device's backup, or it was sealed with a key that no longer exists. Its lock
+ * boundary may even be open — but there is nothing behind it to show, because the
+ * plaintext could not be decrypted.
+ *
+ * Without this, granting access to such a row made it *worse*: it left the
+ * "locked" presentation and rendered as an empty row (no address, no title), which
+ * is exactly what "all my links disappeared after unlocking" looked like. Treating
+ * an unreadable row as withheld keeps the honest presentation — a locked row that
+ * says so — instead of a blank one that says nothing.
+ */
+function withUnreadable(hidden: HiddenIds, snapshot: { notes: Note[]; links: SavedLink[] }): HiddenIds {
+  const links = new Set(hidden.links);
+  const notes = new Set(hidden.notes);
+  let changed = false;
+
+  for (const link of snapshot.links) {
+    if (!isSealed(link) || links.has(link.id)) continue;
+    links.add(link.id);
+    changed = true;
+  }
+  for (const note of snapshot.notes) {
+    if (!isSealed(note) || notes.has(note.id)) continue;
+    notes.add(note.id);
+    changed = true;
+  }
+
+  // The same object when nothing changed: subscribers compare by reference.
+  return changed ? { ...hidden, links, notes } : hidden;
+}
+
+/**
  * Read the vault, then apply the lock filter once, centrally.
  *
  * This is the single place "what may be shown right now" is decided. Every
@@ -353,7 +388,7 @@ async function loadEverything() {
   const protection = computeProtection(snapshot.folders, snapshot.notes, snapshot.links);
   const sessionLocked = isSessionLocked();
   const grantedRoots = usePrivacyStore.getState().grantedRoots;
-  const hidden = hiddenIds(protection, new Set(grantedRoots));
+  const hidden = withUnreadable(hiddenIds(protection, new Set(grantedRoots)), snapshot);
   const hasProtection = protection.folders.size > 0 || protection.notes.size > 0 || protection.links.size > 0;
 
   /*

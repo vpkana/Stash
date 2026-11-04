@@ -21,7 +21,9 @@ import { cn } from '@/lib/utils';
  * different ways, which is not something to learn from a sentence in an empty
  * state.
  *
- * So the first run shows the sheets themselves. They are drawn here rather than
+ * So the first run shows the sheets themselves — once, decided by
+ * `stores/onboarding-store.ts`, which is the only place that answers "is this a
+ * new install" — and after that it opens only when the user asks. They are drawn here rather than
  * shipped as screenshots: a picture of Instagram would date, and a picture of
  * *this* app's own idea of Instagram would be a promise about someone else's
  * interface. A schematic phone with a highlighted row says the one thing that
@@ -32,9 +34,6 @@ import { cn } from '@/lib/utils';
  * missing feature, so instead of pretending otherwise the guide says so once,
  * plainly, and offers the Android build for people who want the share sheet.
  */
-
-/** Remembered so the guide opens once, not every time the vault is empty. */
-export const SHARE_GUIDE_SEEN_KEY = 'onboarding.shareGuide';
 
 /**
  * Where the Android build lives.

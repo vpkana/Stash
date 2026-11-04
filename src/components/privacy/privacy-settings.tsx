@@ -10,7 +10,7 @@ import {
   Smartphone,
 } from '@/components/ui/icons';
 import { pluralize } from '@/lib/format';
-import { allLockRoots } from '@/lib/privacy/protection';
+import { allLockRoots, isSealed } from '@/lib/privacy/protection';
 import { devicePromptName } from '@/lib/privacy/auth';
 import {
   LEGACY_PASSCODE_EXPLANATION,
@@ -18,6 +18,7 @@ import {
   LEGACY_PASSCODE_HEADLINE,
 } from '@/lib/privacy/legacy-passcode';
 import { screenPrivacySupported } from '@/lib/privacy/screen';
+import { GOOGLE_SYNC_ENABLED } from '@/lib/sync/availability';
 import { usePrivacyStore } from '@/stores/privacy-store';
 import { useVaultStore } from '@/stores/vault-store';
 import { Button } from '@/components/ui/button';
@@ -58,7 +59,7 @@ import { ConfirmAuth } from './confirm-auth';
  * would look for it.
  */
 
-type Mode = 'idle' | 'setup' | 'open-all' | 'abandon' | 'migrate';
+type Mode = 'idle' | 'setup' | 'open-all' | 'remove-all' | 'migrate';
 
 export function PrivacySettings() {
   const ready = usePrivacyStore((state) => state.ready);
@@ -74,7 +75,7 @@ export function PrivacySettings() {
 
   const enableLocking = usePrivacyStore((state) => state.enableLocking);
   const unlockWithLegacyPasscode = usePrivacyStore((state) => state.unlockWithLegacyPasscode);
-  const abandonLock = usePrivacyStore((state) => state.abandonLock);
+  const disable = usePrivacyStore((state) => state.disable);
   const update = usePrivacyStore((state) => state.update);
   const lock = usePrivacyStore((state) => state.lock);
   const unlockWithBiometrics = usePrivacyStore((state) => state.unlockWithBiometrics);
@@ -116,6 +117,19 @@ export function PrivacySettings() {
     links: protection.links.size,
   };
   const hasLocks = lockedCounts.folders + lockedCounts.notes + lockedCounts.links > 0;
+
+  /**
+   * Rows that are still ciphertext in the vault.
+   *
+   * While the session is locked that is every locked row, so this is only
+   * meaningful while a key is in hand — then it means exactly one thing: content
+   * sealed under a key this device does not have, which no prompt here can open.
+   * Said out loud instead of leaving the user tapping a locked row that will never
+   * open, or worse, wondering where their links went.
+   */
+  const unreadable = useVaultStore(
+    (state) => state.links.filter(isSealed).length + state.notes.filter(isSealed).length,
+  );
   /** Every distinct boundary there is, so "open everything" is expressible. */
   const everyRoot = React.useMemo(() => [...allLockRoots(protection)], [protection]);
 
@@ -202,6 +216,12 @@ export function PrivacySettings() {
                   opening the folder asks {promptName} for your unlock, and passing it opens that folder only.
                   Opening Stash, browsing, searching and saving links never ask for anything. Access ends when
                   you switch tabs or leave Stash.
+                </p>
+              ) : null}
+              {unlocked && unreadable > 0 ? (
+                <p className="mt-1.5 text-meta leading-relaxed text-warning">
+                  {unreadable} item(s) here are locked with a key this device does not have — they arrived in a
+                  backup from another device. Unlocking cannot open them, and they are kept rather than deleted.
                 </p>
               ) : null}
             </div>
@@ -449,41 +469,53 @@ export function PrivacySettings() {
                 vault onto a new one without a recovery key, and those items stay unreadable there — everything
                 else keeps working normally, and nothing is deleted.
               </p>
+              {GOOGLE_SYNC_ENABLED ? (
+                <p className="mt-2 text-meta leading-relaxed text-fg/85">
+                  If you use Google Drive sync, set up a recovery key{' '}
+                  <span className="font-medium text-fg">before</span> you need it, in Settings → Google Drive sync.
+                  It is shown once, only you hold it, and a copy wrapped by it sits in your own Drive. Stash cannot
+                  use it for you and cannot reset it. Entering it installs the vault key on another device — or
+                  re-registers the unlock prompt after a Windows Hello reset — and opening a locked folder there
+                  still asks for that device&apos;s own prompt.
+                </p>
+              ) : null}
               <p className="mt-2 text-meta leading-relaxed text-fg/85">
-                If you use Google Drive sync, set up a recovery key{' '}
-                <span className="font-medium text-fg">before</span> you need it, in Settings → Google Drive sync.
-                It is shown once, only you hold it, and a copy wrapped by it sits in your own Drive. Stash cannot
-                use it for you and cannot reset it. Entering it installs the vault key on another device — or
-                re-registers the unlock prompt after a Windows Hello reset — and opening a locked folder there
-                still asks for that device&apos;s own prompt.
+                Removing every lock below asks for your device prompt, then opens everything: no folder, note or
+                link stays locked, and nothing is blanked or deleted. If an item was locked with a key this device
+                does not have — one that arrived in somebody else&apos;s backup — it stays locked, and the app tells
+                you how many.
               </p>
-              <p className="mt-2 text-meta leading-relaxed text-fg/85">
-                Removing the lock below destroys that key on purpose. It is the honest choice only when you would
-                rather have an empty lock than a lock you cannot open.
-              </p>
-              {mode === 'abandon' ? (
+              {mode === 'remove-all' ? (
                 <div className="mt-3">
                   <ConfirmAuth
-                    reason="Destroy the lock on your Stash vault"
-                    confirmLabel="Remove the lock permanently"
+                    reason="Remove every lock from your Stash vault"
+                    confirmLabel="Unlock everything and remove the locks"
                     tone="danger"
                     hint={
                       <>
-                        Removing the lock destroys the key. Every locked note, link and folder becomes permanently
-                        unreadable and cannot be recovered on any device. Your other content is untouched.
+                        Your device prompt opens every locked folder, note and link, and the locks are removed. Your
+                        content keeps its address, title and place — nothing is deleted.
                       </>
                     }
                     onAuthorized={async () => {
-                      await abandonLock();
+                      const result = await disable();
                       reset();
-                      toast('Lock removed. Locked items are now unreadable.', { tone: 'danger' });
+                      if (result.ok) {
+                        toast('Every lock is removed. Your folders, notes and links are readable again.', {
+                          tone: 'success',
+                        });
+                      } else {
+                        toast(result.message ?? 'The locks were removed, but some items could not be opened.', {
+                          tone: 'danger',
+                        });
+                      }
                     }}
                     onCancel={reset}
                   />
                 </div>
               ) : (
-                <Button variant="surface" className="mt-3 w-full" onClick={() => setMode('abandon')}>
-                  Remove the lock
+                <Button variant="surface" className="mt-3 w-full" onClick={() => setMode('remove-all')}>
+                  Remove every lock
                 </Button>
               )}
             </div>

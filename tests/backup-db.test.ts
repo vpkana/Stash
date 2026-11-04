@@ -230,10 +230,9 @@ describe('export, uninstall, import', () => {
     expect(await structure()).toEqual(before);
   });
 
-  it('reproduces the vault through a fully readable file, and re-locks what was locked', async () => {
+  it('restores a fully readable file as an unlocked vault, with every address intact', async () => {
     await setupLegacyPasscodeVault(PASSCODE);
     await populate({ withLocks: true });
-    const before = await structure();
 
     const built = await build('plaintext');
     // A readable file genuinely has the locked items in the clear.
@@ -242,16 +241,18 @@ describe('export, uninstall, import', () => {
     await resetDatabase();
     await importText(built.text!, 'replace');
 
-    expect(await structure()).toEqual(before);
-    // The lock flags travelled, so reconciliation sealed the *content* again: the
-    // database is not left holding the readable copy the file contained. The
-    // folder row keeps its name — the label is not the secret — but the links
-    // inside it go back to being ciphertext.
     const restored = await readVaultRaw();
-    const personal = restored.folders.find((row) => row.name === 'Personal');
-    expect(personal?.isLocked).toBe(true);
-    expect(restored.links.some((row) => isSealed(row))).toBe(true);
-    expect(JSON.stringify(restored.links)).not.toContain('example.com/c');
+    /*
+     * The file is the vault *unlocked*, which is what the export screen promises
+     * and the reason it asks for the device prompt first. Restoring it gives a
+     * vault anyone can read: no lock flags, no ciphertext, every address kept.
+     * The locks are put back deliberately, by the person holding the file.
+     */
+    expect(restored.folders.every((row) => row.isLocked === false)).toBe(true);
+    expect(restored.notes.every((row) => row.isLocked === false)).toBe(true);
+    expect(restored.links.every((row) => row.isLocked === false)).toBe(true);
+    expect(restored.links.some((row) => isSealed(row))).toBe(false);
+    expect(JSON.stringify(restored.links)).toContain('example.com/c');
   });
 
   it('keeps favourites, archive state, tags and note references', async () => {
@@ -411,8 +412,10 @@ describe('locked content', () => {
 
     const parsed = mustParse(built.text!);
     expect(parsed.report.summary.sealedItems).toBe(0);
-    // The lock flag still travels, so a restore locks the folder again.
-    expect(parsed.data.folders.find((row) => row.id === personal)?.isLocked).toBe(true);
+    // Nothing in the file is locked: a readable export is the vault *unlocked*, so
+    // importing it gives ordinary content and the locks are put back by hand.
+    expect(parsed.data.folders.find((row) => row.id === personal)?.isLocked).toBe(false);
+    expect(parsed.data.links.every((row) => row.isLocked === false)).toBe(true);
   });
 
   it('refuses a readable export while the session is locked, rather than shipping ciphertext', async () => {
