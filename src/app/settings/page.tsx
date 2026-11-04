@@ -3,7 +3,6 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  Check,
   ChevronRight,
   Download,
   Inbox,
@@ -172,12 +171,20 @@ export default function SettingsPage() {
           all change while you look at them.
         */}
         <div className="card mx-4 mt-2 p-4">
-          <p className="text-row font-medium text-fg">Accent colour</p>
-          <p className="mt-0.5 text-meta leading-relaxed text-subtle">
-            Used for the primary action, the current tab and selections. The app icon stays ink and cream
-            whatever you choose.
-          </p>
-          <div className="mt-3 grid grid-cols-4 gap-1.5" role="radiogroup" aria-label="Accent colour">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-row font-medium text-fg">Accent colour</p>
+              <p className="mt-0.5 text-meta leading-relaxed text-subtle">
+                Colours your buttons, tabs and selections.
+              </p>
+            </div>
+            <span
+              className="size-8 shrink-0 rounded-full ring-1 ring-black/15 ring-inset"
+              style={{ backgroundColor: ACCENTS.find((option) => option.id === accent)?.swatch }}
+              aria-hidden
+            />
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Accent colour">
             {ACCENTS.map((option) => {
               const active = accent === option.id;
               return (
@@ -189,17 +196,17 @@ export default function SettingsPage() {
                   aria-label={option.label}
                   onClick={() => void setAccent(option.id)}
                   className={cn(
-                    'tap flex flex-col items-center gap-1.5 rounded-xl px-1 pt-2 pb-1.5 text-meta font-medium',
-                    active ? 'bg-accent-soft text-accent' : 'text-muted active:bg-surface-2',
+                    'tap flex min-h-12 items-center gap-2.5 rounded-xl border px-3 text-left text-meta font-medium',
+                    active
+                      ? 'border-accent bg-accent-soft text-accent'
+                      : 'border-border bg-surface text-muted hover:bg-surface-2 active:bg-surface-2',
                   )}
                 >
                   <span
-                    className="flex size-7 items-center justify-center rounded-full ring-1 ring-black/15 ring-inset"
+                    className="flex size-6 shrink-0 items-center justify-center rounded-full ring-1 ring-black/15 ring-inset"
                     style={{ backgroundColor: option.swatch }}
                     aria-hidden
-                  >
-                    {active ? <Check size={15} strokeWidth={3} className="text-white" /> : null}
-                  </span>
+                  />
                   {option.label}
                 </button>
               );
@@ -232,7 +239,7 @@ export default function SettingsPage() {
             <Share2 size={18} strokeWidth={1.9} className="shrink-0 text-muted" aria-hidden />
             <span className="min-w-0 flex-1">
               <span className="block text-row font-medium text-fg">How sharing works</span>
-              <span className="block text-meta text-subtle">The share sheet, step by step — phones only</span>
+              <span className="block text-meta text-subtle">The share sheet, step by step</span>
             </span>
             <ChevronRight size={17} strokeWidth={2} className="shrink-0 text-subtle" aria-hidden />
           </button>
@@ -305,8 +312,8 @@ export default function SettingsPage() {
         <p className="flex items-start gap-2 px-5 pt-2.5 text-meta leading-relaxed text-subtle">
           <Shield size={14} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden />
           {GOOGLE_SYNC_ENABLED
-            ? 'Stash has no server. Your vault lives on this device and works exactly the same in airplane mode. If you turn on Google Drive sync, a copy also lives in your own Drive’s private app-data folder — and only while you keep it connected.'
-            : 'Stash has no server. Your vault lives on this device only, and works exactly the same in airplane mode. Nothing is uploaded anywhere; the backup file is the way to move a copy to another device.'}
+            ? 'Your vault stays on this device and works offline. Turn on Google Drive sync to keep a copy in your private Drive app-data folder.'
+            : 'Your vault stays on this device and works offline. Export a backup to move it to another device.'}
         </p>
       </Section>
 
@@ -340,11 +347,6 @@ export default function SettingsPage() {
             </Button>
           )}
           <p className="px-1 text-meta leading-relaxed text-subtle">
-            Opens the system file picker. The file is checked completely — format, version, structure and every
-            reference — before anything in your vault is touched, and you are shown what a restore would change
-            before agreeing to it.
-          </p>
-          <p className="px-1 text-meta leading-relaxed text-subtle">
             &ldquo;Add what is missing&rdquo; never overwrites: an item that is already here is left alone, so importing the
             same file twice cannot duplicate or damage anything. &ldquo;Replace everything&rdquo; clears the vault first and
             writes a safety copy you can restore from.
@@ -358,7 +360,7 @@ export default function SettingsPage() {
           <p className="mt-1.5 text-meta leading-relaxed text-fg/80">
             Deletes {pluralize(eraseCounts.links, 'link')}, {pluralize(eraseCounts.notes, 'note')} and{' '}
             {pluralize(eraseCounts.folders, 'folder')} from this device, including anything in the trash. Export first
-            if you want a copy — this cannot be undone.
+            if you want a copy, This cannot be undone.
           </p>
           <div className="mt-3.5 flex items-center justify-between gap-3">
             <span className="text-meta font-medium text-fg">I understand this is permanent</span>
@@ -381,7 +383,7 @@ export default function SettingsPage() {
           ) : (
             <Button
               variant="danger"
-              className="mt-3 w-full"
+              className="mt-3 w-full border border-[#f87171] bg-[#b91c1c] text-white shadow-md hover:bg-[#dc2626] active:bg-[#991b1b]"
               disabled={!confirmErase || busy || syncing}
               onClick={() => setEraseAuthorising(true)}
             >
@@ -403,7 +405,7 @@ export default function SettingsPage() {
           string on its own. */}
       <div className="flex flex-col items-center gap-2 px-5 pt-2 pb-10">
         <LogoTile size={40} />
-        <p className="text-meta text-subtle text-center">Stash v0.1 · offline vault for links and notes</p>
+        <p className="text-meta text-subtle text-center">Stash · offline vault for links and notes</p>
       </div>
 
       {/* Mounted once for the whole page: the flow is driven by the store, so it

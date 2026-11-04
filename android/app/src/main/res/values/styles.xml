@@ -37,17 +37,62 @@
         <item name="android:windowActionModeOverlay">true</item>
 
         <!--
-            Both spellings, both as a concrete colour.
+            The window, stated once and concretely.
 
-            `android:background` here used to be `@null`, meaning "paint nothing"
-            — and with the window edge to edge, "nothing" is not the app's
-            background, it is whatever the window was created with. On a cold
-            start that is the launch theme, so a strip of the launch surface
-            could show above or below the app's own content. Stating the colour
-            twice removes the ambiguity: the window is this colour, always.
+            `android:windowBackground` used to be `@null`, meaning "paint
+            nothing" — and with the window edge to edge, "nothing" is not the
+            app's background, it is whatever the window was created with. On a
+            cold start that is the launch theme, so a strip of the launch surface
+            could show above or below the app's own content. The colour removes
+            the ambiguity: the window is this colour, always.
+
+            It is deliberately the only place the colour is declared. A second,
+            generic `android:background` on the theme is inherited by every
+            window created from it — including the selection toolbar's popup —
+            and that is how a flat rectangle of app background ended up painted
+            over the note behind Cut / Copy.
         -->
-        <item name="android:background">@color/stash_window_background</item>
         <item name="android:windowBackground">@color/stash_window_background</item>
+
+        <!--
+            The text-selection toolbar's own surface.
+
+            The menu over a selection is a separate popup window. Created from
+            this theme, that window inherits `windowBackground` above — a flat
+            rectangle of the app's page colour, larger than the buttons, which is
+            the slab that was appearing behind Cut / Copy. `actionModeBackground`
+            is the same thing one layer in, for a contextual bar instead of a
+            floating popup. Both are turned off here, and the card is drawn by
+            the popup style below instead; see `StashActionModePopup`.
+        -->
+        <item name="actionModePopupWindowStyle">@style/StashActionModePopup</item>
+        <item name="actionModeBackground">@android:color/transparent</item>
+        <item name="android:actionModeBackground">@android:color/transparent</item>
+    </style>
+
+    <!--
+        The surface of the floating selection toolbar.
+
+        Two backgrounds are involved, and only one of them should paint:
+
+        1. the popup's *window* background, which a window created from this theme
+           inherits from `windowBackground` unless it is told otherwise. That is
+           the one that was painting a flat rectangle of app background across
+           the note. Here it is explicitly transparent.
+        2. the popup's own background, which is the card around the buttons and
+           should be exactly the size of the popup.
+
+        So the window paints nothing, and the card is the app's own floating
+        surface (`selection_toolbar_background`) rather than the AppCompat default
+        nine-patch, which is tinted for a palette this app does not use.
+    -->
+    <style name="StashActionModePopup" parent="Widget.AppCompat.PopupWindow">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowFrame">@null</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+        <item name="android:popupBackground">@drawable/selection_toolbar_background</item>
     </style>
 
     <!--

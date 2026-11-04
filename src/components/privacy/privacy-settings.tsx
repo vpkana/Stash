@@ -285,15 +285,13 @@ export function PrivacySettings() {
                     Turn on locking
                   </Button>
                   <p className="px-0.5 pt-2 text-meta leading-relaxed text-subtle">
-                    Locked items are encrypted with a key that lives in this device’s secure storage, and are
-                    opened with {promptName} — your fingerprint, face, PIN, pattern or password, chosen inside
-                    the system prompt. There is no Stash password to create or forget, and your vault is never
-                    readable without that prompt.
+                    Locked items are encrypted on this device and unlocked with {promptName}. No Stash password
+                    needed.
                     {deviceSecurity === 'insecure'
-                      ? ' This device has no screen lock yet, so set one up first — otherwise a lock here could never be opened.'
+                      ? ' Set up a screen lock first to use this feature.'
                       : deviceStoreKind === 'web'
-                        ? ' This computer asks for Windows Hello or your device PIN.'
-                        : ' The choice between a fingerprint and your PIN belongs to the system prompt: it is offered there, whether or not biometrics are enrolled.'}
+                        ? ' Use Windows Hello or your device PIN to unlock.'
+                        : ' Your system prompt determines the available unlock methods.'}
                   </p>
                 </>
               ) : (
@@ -393,69 +391,6 @@ export function PrivacySettings() {
 
       {keyringPresent ? (
         <>
-          <Section title="Screen privacy">
-            <div className="mx-4 overflow-hidden card">
-              <ToggleRow
-                icon={<Smartphone size={17} strokeWidth={1.9} aria-hidden />}
-                label="Hide content in the app switcher and block screenshots"
-                description={
-                  screenPrivacy === false
-                    ? 'Android only. A browser cannot reliably stop a screenshot, so this has no effect here — Stash in a browser still shows its content if the screen is captured. Install the Android app for this one.'
-                    : 'Android only. Blocks screenshots and screen recording of Stash, and replaces the thumbnail Android shows in the app switcher with a blank card.'
-                }
-                checked={screenPrivacy === false ? false : settings.secureScreen}
-                disabled={screenPrivacy === false}
-                onChange={(value) => void update({ secureScreen: value })}
-                last
-              />
-            </div>
-            <p className="px-5 pt-2 text-meta leading-relaxed text-subtle">
-              {screenPrivacy === false ? (
-                <>
-                  This is an Android window setting, so it is offered only in the Android app. Nothing else about
-                  your vault changes: the same content is encrypted, and the same unlock still guards it.
-                </>
-              ) : (
-                <>
-                  Screenshot blocking is enforced by Android, so it holds in the app and cannot be guaranteed
-                  anywhere else — no browser can promise it. Stash also applies it by itself whenever the vault is
-                  locked, whatever this switch says. It is a separate setting from locking: switching it on turns
-                  nothing on and gates nothing.
-                </>
-              )}
-            </p>
-          </Section>
-
-          <Section title="What is protected">
-            <div className="mx-4 card p-4">
-              <ul className="flex flex-col gap-2 text-meta leading-relaxed text-muted">
-                <li>
-                  <span className="font-medium text-fg">Encrypted:</span> a locked item&apos;s note title and body,
-                  a locked link&apos;s address and title, and everything inside a locked folder. Locking a folder
-                  covers everything beneath it.
-                </li>
-                <li>
-                  <span className="font-medium text-fg">Still visible:</span> that a locked item exists and where it
-                  sits — it keeps its row, its place in the tree, its counts and its timestamps, and shows as a
-                  locked entry you can open. Also visible: a folder&apos;s name, which is the label on the lock
-                  rather than the contents behind it.
-                </li>
-                <li>
-                  <span className="font-medium text-fg">How it opens:</span> the operating system verifies you —
-                  a fingerprint, face, or the device PIN, pattern or password — and Stash never sees any of them.
-                  Stash holds no password, stores no hash and cannot check a credential itself; the prompt&apos;s
-                  answer releases a key from{' '}
-                  {deviceStoreKind === 'web' ? 'this machine’s own storage' : 'Android’s Keystore-backed storage'},
-                  and only that key decrypts a locked item.
-                </li>
-                <li>
-                  <span className="font-medium text-fg">After a restart:</span> nothing is unlocked. A key comes back
-                  only from the prompt, and it does not outlive the session — switching tabs or leaving Stash locks
-                  the items again.
-                </li>
-              </ul>
-            </div>
-          </Section>
 
           <Section title="If you cannot unlock" className="pb-10">
             <div className="mx-4 rounded-2xl border border-danger/30 bg-danger-soft p-4">
