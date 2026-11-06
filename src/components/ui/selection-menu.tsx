@@ -21,9 +21,11 @@ import { Copy, Cut, Paste, SelectAll } from '@/components/ui/icons';
  * ## Why the native menu is not simply replaced
  *
  * It cannot be dismissed from the page: the flag that withholds it lives in the
- * WebView (`StashWebView`), and the page asks for it over the bridge while an
- * editable has focus. Every other surface in the app has text selection turned
- * off in CSS, so a selection only ever exists where this bar also exists.
+ * WebView (`StashWebView`), and the page asks for it over the bridge. Every
+ * surface in the app but the editables has text selection turned off in CSS, so a
+ * selection only ever exists where this bar also exists — which is why the
+ * platform's menu is withheld for good rather than only while something is
+ * focused.
  *
  * ## What it acts on
  *
@@ -75,9 +77,6 @@ function isAndroid(): boolean {
 function isIOS(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
 }
-
-/** The element surface text is selected in: a field wrapper or a rich editor. */
-const EDITABLE = 'input, textarea, [contenteditable="true"], [contenteditable=""]';
 
 /** Input types whose text can be selected; a checkbox has no selection to offer. */
 const SELECTABLE_INPUT_TYPES = new Set([
@@ -529,37 +528,24 @@ export function SelectionMenu() {
   }, [dismiss]);
 
   /*
-   * Withhold the platform's menu while an editable has focus.
+   * Withhold the platform's menu for as long as the app is running.
    *
-   * Focus is the exact signal — every route into editing ends there, including a
-   * tap on a field that was not focused yet — and it is what makes this universal:
-   * the note body, the note title, a link's title field and a folder's rename field
-   * all get this bar, and none of them gets the slab.
+   * Deliberately not tied to focus. A long press on a body that does not have
+   * focus yet is the ordinary case — the editor was left a moment ago, the finger
+   * comes back — and on that path the platform asks for its menu before the page
+   * is told anything about focus, so a flag set from `focusin` arrives after the
+   * slab has already been shown. Focus is also not needed to decide: selection is
+   * allowed nowhere but the editables (`globals.css`), and every one of them has
+   * this bar, so there is no surface left that wants the platform's menu.
    */
   React.useEffect(() => {
     if (!isAndroid()) return;
-    let suppressed = false;
-    const ask = (next: boolean) => {
-      if (next === suppressed) return;
-      suppressed = next;
-      void selectionMenu.setSuppressed({ suppressed: next }).catch(() => {
-        // Forgotten, so the next focus tries again: the plugin exists on the
-        // native build only, and a web build simply keeps its own menu.
-        suppressed = !next;
-      });
-    };
-    const isEditable = (node: EventTarget | null) =>
-      node instanceof Element && !!node.closest(EDITABLE);
-
-    const onFocusIn = (event: FocusEvent) => ask(isEditable(event.target));
-    const onFocusOut = (event: FocusEvent) => ask(isEditable(event.relatedTarget));
-
-    document.addEventListener('focusin', onFocusIn);
-    document.addEventListener('focusout', onFocusOut);
+    void selectionMenu.setSuppressed({ suppressed: true }).catch(() => {
+      // No plugin: a web build, or a native build whose WebView could not be
+      // swapped for `StashWebView`. Nothing to withhold, and nothing to say.
+    });
     return () => {
-      document.removeEventListener('focusin', onFocusIn);
-      document.removeEventListener('focusout', onFocusOut);
-      ask(false);
+      void selectionMenu.setSuppressed({ suppressed: false }).catch(() => {});
     };
   }, []);
 
@@ -974,7 +960,22 @@ function SelectionBar({
       role="toolbar"
       aria-label="Selection actions"
       data-selection-bar
-      className="animate-pop-in fixed z-50 flex items-center gap-0.5 rounded-2xl border border-border bg-surface/95 p-1 shadow-raised backdrop-blur-xl"
+      /*
+       * `z-[70]` puts the bar above every sheet and dialog (all `z-50`) and above
+       * the toasts (`z-[60]`), but still below the privacy gates (`z-[100]`,
+       * `z-[120]`), which must stay on top of everything. Portals mount in the
+       * order they are created, and a sheet opens long after this bar did, so an
+       * equal layer would leave the bar painted underneath the sheet it belongs
+       * to — which is exactly what a selection in a link's title field looked
+       * like.
+       *
+       * `pointer-events-auto` is load-bearing rather than decorative: a modal
+       * sheet sets `pointer-events: none` on `<body>` while it is open, and this
+       * bar is a child of `<body>`. Without it the bar would be visible over the
+       * sheet and untouchable — every press passing through to the words behind
+       * it.
+       */
+      className="animate-pop-in pointer-events-auto fixed z-[70] flex items-center gap-0.5 rounded-2xl border border-border bg-surface/95 p-1 shadow-raised backdrop-blur-xl"
       style={{
         top: place?.top ?? anchor.top,
         left: place?.left ?? anchor.left,
@@ -1058,7 +1059,8 @@ function SelectionHandle({
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
-      className="fixed z-50 flex size-11 touch-none items-start justify-center"
+      /* Layer and pointer events for the same two reasons as the bar itself. */
+      className="pointer-events-auto fixed z-[70] flex size-11 touch-none items-start justify-center"
       style={{
         // The dot is centred in the square: its middle lands just under the line.
         top: point.y + point.height - 6,
