@@ -23,6 +23,7 @@ import {
   Check as PhCheck,
   CheckCircle as PhCheckCircle,
   CircleNotch as PhCircleNotch,
+  ClipboardText as PhClipboardText,
   CloudArrowUp as PhCloudArrowUp,
   CloudCheck as PhCloudCheck,
   CloudSlash as PhCloudSlash,
@@ -78,6 +79,8 @@ import {
   Plus as PhPlus,
   Quotes as PhQuotes,
   RocketLaunch as PhRocketLaunch,
+  Scissors as PhScissors,
+  SelectionAll as PhSelectionAll,
   ShareNetwork as PhShareNetwork,
   Shield as PhShield,
   ShieldCheck as PhShieldCheck,
@@ -210,6 +213,11 @@ export const Clock = icon(PhClock, 'Clock');
 export const Star = icon(PhStar, 'Star');
 export const Tag = icon(PhTag, 'Tag');
 export const Clapperboard = icon(PhFilmSlate, 'Clapperboard');
+
+// --- The clipboard ----------------------------------------------------------
+export const Cut = icon(PhScissors, 'Cut');
+export const Paste = icon(PhClipboardText, 'Paste');
+export const SelectAll = icon(PhSelectionAll, 'SelectAll');
 
 // --- Notes and writing ------------------------------------------------------
 export const FilePlus2 = icon(PhFilePlus, 'FilePlus2');

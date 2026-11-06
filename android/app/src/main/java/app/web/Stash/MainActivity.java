@@ -1,6 +1,10 @@
 package app.web.Stash;
 
 import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.webkit.WebView;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.ActionBar;
@@ -12,10 +16,11 @@ public class MainActivity extends BridgeActivity {
     /**
      * Register the plugins that are local to the app rather than shipped as npm
      * packages. Capacitor's own plugins register themselves from the generated
-     * plugin manifest; these four are small enough to live here, and keeping
+     * plugin manifest; these six are small enough to live here, and keeping
      * them local means the parts that touch Android-specific behaviour — the
-     * window flags, the incoming share, the Google token exchange and the
-     * native day/night mode — have no third-party dependency.
+     * window flags, the incoming share, the Google token exchange, the native
+     * day/night mode, and the selection menu and clipboard the note editor's
+     * own selection bar needs — have no third-party dependency.
      *
      * The share receiver needs no further wiring: registering it before
      * `super.onCreate` is enough, because Capacitor replays the launching intent
@@ -49,6 +54,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShareReceiverPlugin.class);
         registerPlugin(GoogleAuthPlugin.class);
         registerPlugin(ThemeModePlugin.class);
+        registerPlugin(SelectionMenuPlugin.class);
+        registerPlugin(ClipboardPlugin.class);
         super.onCreate(savedInstanceState);
 
         /*
@@ -61,5 +68,55 @@ public class MainActivity extends BridgeActivity {
         if (actionBar != null) {
             actionBar.hide();
         }
+    }
+
+    /**
+     * Hand Capacitor the app's own WebView.
+     *
+     * Capacitor inflates its WebView from `capacitor_bridge_layout_main` and
+     * finds it by id when it builds the bridge, so the one moment an app can
+     * substitute its own class is between that layout being set and that
+     * lookup — which is exactly here, at the top of `load()`. The placeholder is
+     * replaced in place, keeping its id and layout params, so everything after
+     * this point sees the WebView it expects.
+     *
+     * `StashWebView` adds one thing: the ability to withhold Android's own
+     * text-selection menu while the note body draws its own. If a future
+     * Capacitor ships a layout this cannot recognise, nothing breaks: the app
+     * keeps the stock WebView and the selection bar still draws, only with the
+     * platform's menu beside it.
+     */
+    @Override
+    protected void load() {
+        adoptOwnWebView();
+        super.load();
+    }
+
+    private void adoptOwnWebView() {
+        View placeholder = findWebView(findViewById(android.R.id.content));
+        if (placeholder == null || placeholder instanceof StashWebView) return;
+        ViewParent parent = placeholder.getParent();
+        if (!(parent instanceof ViewGroup)) return;
+
+        ViewGroup container = (ViewGroup) parent;
+        int index = container.indexOfChild(placeholder);
+        ViewGroup.LayoutParams params = placeholder.getLayoutParams();
+
+        StashWebView webView = new StashWebView(this);
+        webView.setId(placeholder.getId());
+        container.removeViewAt(index);
+        container.addView(webView, index, params);
+    }
+
+    /** The first WebView in the tree; Capacitor's layout holds exactly one. */
+    private static View findWebView(View root) {
+        if (root instanceof WebView) return root;
+        if (!(root instanceof ViewGroup)) return null;
+        ViewGroup group = (ViewGroup) root;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View found = findWebView(group.getChildAt(i));
+            if (found != null) return found;
+        }
+        return null;
     }
 }
