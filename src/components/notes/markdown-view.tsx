@@ -32,7 +32,8 @@ export function MarkdownView({ content, onToggleChecklist, className }: Markdown
   }
 
   return (
-    <div className={cn('flex flex-col gap-3 text-row leading-relaxed text-fg', className)}>
+    // Selectable while reading: copying a passage is the one thing a reader is for.
+    <div data-selectable className={cn('flex flex-col gap-3 text-row leading-relaxed text-fg', className)}>
       {blocks.map((block, index) => (
         <Block
           key={`${block.kind}-${block.line}-${index}`}

@@ -1,9 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import { createPortal } from 'react-dom';
-import { Capacitor, registerPlugin } from '@capacitor/core';
-import { Copy, Cut, Paste, SelectAll } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import {
   activeFormats,
@@ -51,25 +48,6 @@ import { trailingUrl } from '@/lib/markdown';
  * by CSS, so the marker is never part of the text and the serialiser can put
  * `- [ ] ` back exactly where it came from. Toggling one is a click on the box,
  * handled here rather than by `execCommand`, which has no concept of it.
- *
- * ## The selection menu
- *
- * Android draws its own menu over a text selection, and it cannot be sized or
- * styled by the app — on this WebView it arrives as a slab of background far
- * larger than its buttons, over the note being read. So the body supplies its
- * own: {@link SelectionBar}, a floating row of Cut / Copy / Paste / Select all
- * anchored to the selection.
- *
- * The platform's copy is asked for, not assumed. The body tells
- * `SelectionMenuPlugin` which surface is being edited, and only while it is the
- * body is the system menu withheld (see `StashWebView` for what that means
- * natively). Tap the title, the search field or the link field and it comes
- * back, because those still use it.
- *
- * The bar acts on the selection it was opened for rather than on whatever the
- * browser holds when a button is pressed: a tap can collapse a selection before
- * that tap's click arrives, and losing the words between pressing Copy and
- * copying them is exactly the failure this code exists to prevent.
  */
 export interface RichTextEditorProps {
   /** Markdown to edit. Changes are adopted only when they come from elsewhere. */
@@ -99,78 +77,6 @@ export interface RichTextEditorProps {
   /** The body gained focus — the toolbar targets whichever surface was last used. */
   onFocus?: () => void;
   ariaLabel?: string;
-}
-
-/**
- * The two native pieces the selection bar needs.
- *
- * `SelectionMenu` withholds Android's own selection menu while the body is the
- * surface being edited. `Clipboard` reads the system clipboard for Paste,
- * because a WebView denies `navigator.clipboard.readText()` outright — the
- * permission it wants cannot be requested by a page inside one.
- */
-interface SelectionMenuPlugin {
-  setSuppressed(options: { suppressed: boolean }): Promise<void>;
-}
-
-interface ClipboardPlugin {
-  read(): Promise<{ text: string }>;
-}
-
-const selectionMenu = registerPlugin<SelectionMenuPlugin>('SelectionMenu');
-const clipboard = registerPlugin<ClipboardPlugin>('Clipboard');
-
-/** Where the bar hangs: the box around the selected words, in viewport pixels. */
-interface SelectionAnchor {
-  top: number;
-  bottom: number;
-  left: number;
-  width: number;
-}
-
-/**
- * The platform the system menu is a problem on.
- *
- * Android is where it is an unstylable slab. iOS draws its own callout, which
- * cannot be withdrawn without native work, so there the platform's menu is left
- * alone and the bar is not drawn beside it. On the web there is no system menu
- * at all and the bar is simply the menu.
- */
-function isAndroid(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
-}
-
-function isIOS(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'ios';
-}
-
-/** Put text on the clipboard when the engine will not do it for us. */
-function copyText(text: string): void {
-  if (!text) return;
-  try {
-    void navigator.clipboard.writeText(text).catch(() => {
-      /* nothing left to fall back to: the words are still selected on screen */
-    });
-  } catch {
-    /* no clipboard in this context */
-  }
-}
-
-/** The system clipboard: through the bridge on Android, the browser API elsewhere. */
-async function readClipboardText(): Promise<string> {
-  if (Capacitor.isNativePlatform()) {
-    try {
-      const { text } = await clipboard.read();
-      return text ?? '';
-    } catch {
-      /* no Clipboard implementation here: fall through to the browser API */
-    }
-  }
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return '';
-  }
 }
 
 export interface RichTextApi {
@@ -563,190 +469,6 @@ export function RichTextEditor({
     }
   }, []);
 
-  /*
-   * --- The selection bar ----------------------------------------------------
-   *
-   * `barAnchor` is what makes the bar exist at all: the box around the selected
-   * words, in viewport pixels. `barRange` is the selection itself, cloned, so
-   * the bar still knows which words it was opened for after the browser has
-   * moved on — which it does the moment a tap lands anywhere, including on the
-   * bar.
-   */
-  const [barAnchor, setBarAnchor] = React.useState<SelectionAnchor | null>(null);
-  const barRange = React.useRef<Range | null>(null);
-  const barHideTimer = React.useRef<number | null>(null);
-
-  const cancelBarHide = React.useCallback(() => {
-    if (barHideTimer.current === null) return;
-    window.clearTimeout(barHideTimer.current);
-    barHideTimer.current = null;
-  }, []);
-
-  const hideSelectionBar = React.useCallback(() => {
-    cancelBarHide();
-    barRange.current = null;
-    setBarAnchor(null);
-  }, [cancelBarHide]);
-
-  /** Show the bar over `range`, and take that selection as the one it acts on. */
-  const showSelectionBar = React.useCallback(
-    (range: Range) => {
-      const rect = range.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) return;
-      cancelBarHide();
-      barRange.current = range.cloneRange();
-      setBarAnchor({ top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width });
-    },
-    [cancelBarHide],
-  );
-
-  /**
-   * Take the bar away shortly after the selection stops being one.
-   *
-   * Not immediately: the click from a tap on the bar can arrive after the
-   * browser has already collapsed the selection, and a bar that unmounts in
-   * between never receives the click that would have copied anything. The delay
-   * is cancelled by every press on the bar, and the conditions are checked
-   * again before it hides — so a copy, which puts the selection back, leaves the
-   * bar exactly where it was.
-   */
-  const scheduleBarHide = React.useCallback(() => {
-    cancelBarHide();
-    barHideTimer.current = window.setTimeout(() => {
-      barHideTimer.current = null;
-      const selection = document.getSelection();
-      const element = ref.current;
-      const inside = !!element && !!selection && element.contains(selection.anchorNode);
-      if (!inside || !selection || selection.isCollapsed) hideSelectionBar();
-    }, 180);
-  }, [cancelBarHide, hideSelectionBar]);
-
-  /**
-   * Ask the native side for the system menu, or hand it back.
-   *
-   * Only when the answer changes: this runs on every focus, press and selection
-   * change, and most of those repeat what the native side was already told.
-   * Failure is swallowed — and forgotten, so the next ask tries again — because
-   * the plugin exists on Android only and a platform without it simply keeps its
-   * own menu beside ours.
-   */
-  const nativeMenuState = React.useRef<boolean | null>(null);
-  const requestNativeMenu = React.useCallback((suppressed: boolean) => {
-    if (!isAndroid()) return;
-    if (nativeMenuState.current === suppressed) return;
-    nativeMenuState.current = suppressed;
-    void selectionMenu.setSuppressed({ suppressed }).catch(() => {
-      nativeMenuState.current = null;
-    });
-  }, []);
-
-  /**
-   * Put the bar's selection back in the browser and on screen.
-   *
-   * `null` means the remembered range no longer belongs to this body — the note
-   * was re-rendered under it, the wrapper replaced — because acting on a stale
-   * range puts text in the wrong place, silently.
-   */
-  const restoreBarSelection = React.useCallback((): Range | null => {
-    const element = ref.current;
-    const range = barRange.current;
-    if (!element || !range) return null;
-    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return null;
-    element.focus({ preventScroll: true });
-    const selection = document.getSelection();
-    if (!selection) return null;
-    selection.removeAllRanges();
-    selection.addRange(range);
-    return range;
-  }, []);
-
-  const cutBarSelection = React.useCallback(() => {
-    cancelBarHide();
-    if (!restoreBarSelection()) return;
-    let cut = false;
-    try {
-      cut = document.execCommand('cut');
-    } catch {
-      cut = false;
-    }
-    if (!cut) {
-      // Refused by the engine: copy by hand, then take the words out ourselves.
-      const range = barRange.current;
-      copyText(range?.toString() ?? '');
-      range?.deleteContents();
-    }
-    emit();
-    publishFormats();
-    hideSelectionBar();
-  }, [cancelBarHide, emit, hideSelectionBar, publishFormats, restoreBarSelection]);
-
-  const copyBarSelection = React.useCallback(() => {
-    cancelBarHide();
-    if (!restoreBarSelection()) return;
-    let copied = false;
-    try {
-      copied = document.execCommand('copy');
-    } catch {
-      copied = false;
-    }
-    if (!copied) copyText(barRange.current?.toString() ?? '');
-    // The bar stays: the selection it is about is still selected, and copying
-    // is not a reason to make anybody select it again.
-    publishFormats();
-  }, [cancelBarHide, publishFormats, restoreBarSelection]);
-
-  const pasteAtBarSelection = React.useCallback(() => {
-    cancelBarHide();
-    const element = ref.current;
-    /*
-     * The range is taken now, not after the clipboard answers: reading it is a
-     * round trip through the bridge, and in that time the tap on the bar may
-     * have collapsed the selection and the bar may have been dismissed. A clone
-     * outlives both.
-     */
-    const range = barRange.current?.cloneRange() ?? null;
-    if (!element || !range) return;
-    void readClipboardText().then((text) => {
-      if (!text) return;
-      if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return;
-      element.focus({ preventScroll: true });
-      const selection = document.getSelection();
-      if (!selection) return;
-      selection.removeAllRanges();
-      selection.addRange(range);
-      /*
-       * `insertText` is the browser's own edit: it replaces the selection, fires
-       * an input event (so the Markdown is written and autosaved) and splits
-       * paragraphs the way typing does. The DOM insertion is only for engines
-       * that refuse it.
-       */
-      if (!document.execCommand('insertText', false, text)) {
-        range.deleteContents();
-        range.insertNode(document.createTextNode(text));
-      }
-      emit();
-      publishFormats();
-      hideSelectionBar();
-    });
-  }, [cancelBarHide, emit, hideSelectionBar, publishFormats]);
-
-  const selectAllInBody = React.useCallback(() => {
-    const element = ref.current;
-    if (!element) return;
-    element.focus({ preventScroll: true });
-    const range = document.createRange();
-    range.selectNodeContents(element);
-    const selection = document.getSelection();
-    if (!selection) return;
-    selection.removeAllRanges();
-    selection.addRange(range);
-    lastRange.current = range.cloneRange();
-    // `selectionchange` will report the same thing a tick later; doing it here
-    // as well keeps the bar from blinking out and back in.
-    showSelectionBar(range);
-    publishFormats();
-  }, [publishFormats, showSelectionBar]);
-
   const api = React.useMemo<RichTextApi>(
     () => ({
       run: (command) => {
@@ -832,14 +554,10 @@ export function RichTextEditor({
     if (readOnly) return;
     const onSelectionChange = () => {
       const selection = document.getSelection();
-      if (!selection || selection.rangeCount === 0) {
-        scheduleBarHide();
-        return;
-      }
+      if (!selection || selection.rangeCount === 0) return;
       if (!ref.current?.contains(selection.anchorNode)) {
         armed.current = null;
         escaping.current = null;
-        scheduleBarHide();
         return;
       }
       const range = selection.getRangeAt(0);
@@ -847,131 +565,13 @@ export function RichTextEditor({
         // Selecting text is not a request to arm a format for the next word.
         armed.current = null;
         escaping.current = null;
-        showSelectionBar(range);
-        // A selection in the body is the one case where the platform's menu is
-        // replaced rather than used; see `StashWebView`.
-        requestNativeMenu(true);
-      } else {
-        scheduleBarHide();
       }
       lastRange.current = range.cloneRange();
       publishFormats();
     };
     document.addEventListener('selectionchange', onSelectionChange);
     return () => document.removeEventListener('selectionchange', onSelectionChange);
-  }, [publishFormats, readOnly, requestNativeMenu, scheduleBarHide, showSelectionBar]);
-
-  /*
-   * Which surface the system menu belongs to.
-   *
-   * The body has its own now, so the platform's is withheld while the body is the
-   * thing being edited and handed back the moment it is not. The pointer listener
-   * is the fast path: it fires on the touch that begins a selection, long before
-   * Android asks for a menu, so the very first long-press is covered too. Focus
-   * and blur are the exact answer for every route that does not start with a
-   * touch on the body.
-   */
-  React.useEffect(() => {
-    if (readOnly || !isAndroid()) return;
-    const element = ref.current;
-    if (!element) return;
-
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      const onBar = target instanceof Element && !!target.closest('[data-selection-bar]');
-      requestNativeMenu(!!target && (onBar || element.contains(target)));
-    };
-    const onFocus = () => requestNativeMenu(true);
-    const onBlur = () => requestNativeMenu(false);
-
-    document.addEventListener('pointerdown', onPointerDown, true);
-    element.addEventListener('focus', onFocus);
-    element.addEventListener('blur', onBlur);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      element.removeEventListener('focus', onFocus);
-      element.removeEventListener('blur', onBlur);
-      // Leaving the note must give the menu back, or the next screen's fields
-      // would be the ones without one.
-      requestNativeMenu(false);
-    };
-  }, [readOnly, requestNativeMenu]);
-
-  /*
-   * Follow the words when the page moves, and drop the bar when they leave the
-   * screen.
-   *
-   * Hiding on every scroll would be the easier rule and the wrong one: Android
-   * scrolls the page a little by itself when a selection is made — to bring the
-   * text and its handles into view — so the bar would vanish at the instant it
-   * appeared. Re-anchoring keeps it tied to the selection instead, which is also
-   * what it should do while the user drags a handle.
-   */
-  React.useEffect(() => {
-    let frame = 0;
-    const follow = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        const range = barRange.current;
-        if (!range) return;
-        const rect = range.getBoundingClientRect();
-        const height = window.visualViewport?.height ?? window.innerHeight;
-        if (rect.bottom < 0 || rect.top > height) {
-          hideSelectionBar();
-          return;
-        }
-        // Only when it actually moved: a scroll frame that leaves the words
-        // where they were must not re-render the bar, or dragging the page
-        // would churn React for nothing.
-        setBarAnchor((current) => {
-          if (
-            current &&
-            Math.abs(current.top - rect.top) < 1 &&
-            Math.abs(current.left - rect.left) < 1 &&
-            Math.abs(current.width - rect.width) < 1
-          ) {
-            return current;
-          }
-          return { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width };
-        });
-      });
-    };
-    window.addEventListener('scroll', follow, true);
-    return () => {
-      window.removeEventListener('scroll', follow, true);
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, [hideSelectionBar]);
-
-  /*
-   * A real viewport change — the keyboard opening or closing, a rotation — puts
-   * the bar back where it would have been before; it is easier to make it go and
-   * let the next selection bring it back.
-   *
-   * Small changes are ignored on purpose: Android resizes the visual viewport a
-   * little for the selection handles themselves, which is not a reason to take
-   * the menu away from the selection it belongs to.
-   */
-  React.useEffect(() => {
-    const hide = () => hideSelectionBar();
-    window.addEventListener('resize', hide);
-    const viewport = window.visualViewport;
-    if (!viewport) {
-      return () => window.removeEventListener('resize', hide);
-    }
-    let height = viewport.height;
-    const onViewportResize = () => {
-      if (Math.abs(viewport.height - height) < 120) return;
-      height = viewport.height;
-      hide();
-    };
-    viewport.addEventListener('resize', onViewportResize);
-    return () => {
-      window.removeEventListener('resize', hide);
-      viewport.removeEventListener('resize', onViewportResize);
-    };
-  }, [hideSelectionBar]);
+  }, [publishFormats, readOnly]);
 
   // Hand the command API up once, and keep it current without re-mounting the
   // editable node. The setter is called only from an effect, never during render.
@@ -1038,233 +638,95 @@ export function RichTextEditor({
   };
 
   return (
-    <>
-      <div
-        ref={ref}
-        role="textbox"
-        aria-multiline="true"
-        aria-label={ariaLabel}
-        data-surface="body"
-        aria-readonly={readOnly || undefined}
-        tabIndex={readOnly ? -1 : 0}
-        contentEditable={!readOnly}
-        suppressContentEditableWarning
-        spellCheck
-        onInput={onInput}
-        onBeforeInput={(event) => {
-          if (readOnly) return;
-          const native = event.nativeEvent as InputEvent;
-          if (native.inputType !== 'insertText' || !native.data) return;
-
-          // Leaving a run: the first plain character is written outside it.
-          const escape = escaping.current;
-          if (escape) {
-            event.preventDefault();
-            escaping.current = null;
-            insertTextOutsideFormat(escape, native.data);
-            emit();
-            publishFormats();
-            return;
-          }
-
-          const format = armed.current;
-          if (!format || caretInsideFormat(format)) return;
-          event.preventDefault();
-          armed.current = null;
-          insertArmedText(format, native.data);
-          emit();
-          publishFormats();
-        }}
-        onKeyDown={(event) => {
-          if (readOnly) return;
-          /*
-           * The first character of an armed format.
-           *
-           * Done here as well as in `onBeforeInput` because keydown runs first
-           * and is the one event every engine dispatches for a printable key;
-           * cancelling it stops the plain character from being inserted, and the
-           * wrapped one goes in instead. Composition is left alone — an IME owns
-           * its own text until it commits.
-           */
-          const native = event.nativeEvent;
-          if (native.isComposing || native.ctrlKey || native.metaKey || native.altKey) return;
-          if (event.key.length !== 1) return;
-
-          const escape = escaping.current;
-          if (escape) {
-            event.preventDefault();
-            escaping.current = null;
-            insertTextOutsideFormat(escape, event.key);
-            emit();
-            publishFormats();
-            return;
-          }
-
-          const format = armed.current;
-          if (!format || caretInsideFormat(format)) return;
-          event.preventDefault();
-          armed.current = null;
-          insertArmedText(format, event.key);
-          emit();
-          publishFormats();
-        }}
-        onBlur={() => {
-          // A pending format belongs to the caret that armed it; leaving the body
-          // must not decorate the next thing the user clicks into.
-          armed.current = null;
-          escaping.current = null;
-        }}
-        onClick={onClick}
-        onFocus={() => {
-          onFocus?.();
-          // The keyboard has not opened yet, so the resize listener does the
-          // work; this only covers the case of a caret at the end of a long note
-          // whose viewport never changes afterwards.
-          requestAnimationFrame(() => {
-            const selection = document.getSelection();
-            const parent = selection?.rangeCount
-              ? selection.getRangeAt(0).startContainer.parentElement
-              : null;
-            parent?.scrollIntoView({ block: 'nearest' });
-          });
-        }}
-        data-placeholder={placeholder}
-        className={cn('note-body focus:outline-none', readOnly && 'cursor-default', className)}
-      />
-
-      {/*
-       * The app's own menu over a selection, portalled to the document body.
-       *
-       * Outside the editable node on purpose: anything rendered inside a
-       * contentEditable is part of the document being edited — it would be
-       * typed text, serialised into the note — and outside it no ancestor's
-       * overflow or transformation can clip the bar.
-       */}
-      {!readOnly && !isIOS() && barAnchor ? (
-        <SelectionBar
-          anchor={barAnchor}
-          onInteract={cancelBarHide}
-          onCut={cutBarSelection}
-          onCopy={copyBarSelection}
-          onPaste={pasteAtBarSelection}
-          onSelectAll={selectAllInBody}
-        />
-      ) : null}
-    </>
-  );
-}
-
-/**
- * The app's own menu over a selection.
- *
- * The four actions Android's menu offers over an editable selection, in a pill
- * that sits above the selection rather than across it. It exists because the
- * platform's menu cannot be sized or themed — on this WebView it paints a slab
- * of background several menu rows taller than the words it belongs to — and
- * because the actions belong to the note editor anyway, which has already read
- * the selection and will serialise the result to Markdown.
- *
- * `anchor` is the box around the selected words, in viewport pixels. The bar
- * measures itself before it is placed, because where it can sit depends on how
- * wide it turned out: above the selection, unless there is no room there, and
- * never off either edge of the screen.
- */
-function SelectionBar({
-  anchor,
-  onCut,
-  onCopy,
-  onPaste,
-  onSelectAll,
-  onInteract,
-}: {
-  anchor: SelectionAnchor;
-  onCut: () => void;
-  onCopy: () => void;
-  onPaste: () => void;
-  onSelectAll: () => void;
-  /** A press has landed on the bar: whatever was about to hide it no longer should. */
-  onInteract: () => void;
-}) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [place, setPlace] = React.useState<{ top: number; left: number } | null>(null);
-
-  React.useLayoutEffect(() => {
-    const bar = ref.current;
-    if (!bar) return;
-    const gap = 8;
-    const edge = 10;
-    const width = bar.offsetWidth;
-    const height = bar.offsetHeight;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
-
-    const centred = anchor.left + anchor.width / 2 - width / 2;
-    const left = Math.min(Math.max(centred, edge), Math.max(edge, viewportWidth - width - edge));
-    // Above the words, and below them only when the selection is near the top
-    // of the screen — the same rule the platform's own menu follows.
-    let top = anchor.top - height - gap;
-    if (top < edge) top = anchor.bottom + gap;
-    top = Math.min(top, Math.max(edge, viewportHeight - height - edge));
-
-    setPlace({ top, left });
-  }, [anchor]);
-
-  return createPortal(
     <div
       ref={ref}
-      role="toolbar"
-      aria-label="Selection actions"
-      data-selection-bar
-      className="animate-pop-in fixed z-50 flex items-center gap-0.5 rounded-2xl border border-border bg-surface/95 p-1 shadow-raised backdrop-blur-xl"
-      style={{
-        top: place?.top ?? anchor.top,
-        left: place?.left ?? anchor.left,
-        // The first pass exists only to be measured.
-        visibility: place ? 'visible' : 'hidden',
-      }}
-      /*
-       * A bar that takes focus is a bar that drops the selection it is about to
-       * act on — and on Android it would also close the keyboard. Swallowing the
-       * default of the press keeps both exactly where they are.
-       */
-      onMouseDown={(event) => event.preventDefault()}
-      onPointerDown={onInteract}
-    >
-      <BarButton label="Cut" icon={<Cut size={17} weight="bold" aria-hidden />} onRun={onCut} />
-      <BarButton label="Copy" icon={<Copy size={17} weight="bold" aria-hidden />} onRun={onCopy} />
-      <BarButton label="Paste" icon={<Paste size={17} weight="bold" aria-hidden />} onRun={onPaste} />
-      <span className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden />
-      <BarButton
-        label="Select all"
-        icon={<SelectAll size={17} weight="bold" aria-hidden />}
-        onRun={onSelectAll}
-      />
-    </div>,
-    document.body,
-  );
-}
+      role="textbox"
+      aria-multiline="true"
+      aria-label={ariaLabel}
+      data-surface="body"
+      aria-readonly={readOnly || undefined}
+      tabIndex={readOnly ? -1 : 0}
+      contentEditable={!readOnly}
+      suppressContentEditableWarning
+      spellCheck
+      onInput={onInput}
+      onBeforeInput={(event) => {
+        if (readOnly) return;
+        const native = event.nativeEvent as InputEvent;
+        if (native.inputType !== 'insertText' || !native.data) return;
 
-/** One action in the selection bar. */
-function BarButton({
-  label,
-  icon,
-  onRun,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onRun: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      // Same reason as the bar itself: never take the selection away.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={onRun}
-      aria-label={label}
-      title={label}
-      className="tap tap-scale flex size-9 shrink-0 items-center justify-center rounded-xl text-fg active:bg-surface-2"
-    >
-      {icon}
-    </button>
+        // Leaving a run: the first plain character is written outside it.
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, native.data);
+          emit();
+          publishFormats();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        armed.current = null;
+        insertArmedText(format, native.data);
+        emit();
+        publishFormats();
+      }}
+      onKeyDown={(event) => {
+        if (readOnly) return;
+        /*
+         * The first character of an armed format.
+         *
+         * Done here as well as in `onBeforeInput` because keydown runs first and
+         * is the one event every engine dispatches for a printable key; cancelling
+         * it stops the plain character from being inserted, and the wrapped one
+         * goes in instead. Composition is left alone — an IME owns its own text
+         * until it commits.
+         */
+        const native = event.nativeEvent;
+        if (native.isComposing || native.ctrlKey || native.metaKey || native.altKey) return;
+        if (event.key.length !== 1) return;
+
+        const escape = escaping.current;
+        if (escape) {
+          event.preventDefault();
+          escaping.current = null;
+          insertTextOutsideFormat(escape, event.key);
+          emit();
+          publishFormats();
+          return;
+        }
+
+        const format = armed.current;
+        if (!format || caretInsideFormat(format)) return;
+        event.preventDefault();
+        armed.current = null;
+        insertArmedText(format, event.key);
+        emit();
+        publishFormats();
+      }}
+      onBlur={() => {
+        // A pending format belongs to the caret that armed it; leaving the body
+        // must not decorate the next thing the user clicks into.
+        armed.current = null;
+        escaping.current = null;
+      }}
+      onClick={onClick}
+      onFocus={() => {
+        onFocus?.();
+        // The keyboard has not opened yet, so the resize listener does the work;
+        // this only covers the case of a caret at the end of a long note whose
+        // viewport never changes afterwards.
+        requestAnimationFrame(() => {
+          const selection = document.getSelection();
+          const parent = selection?.rangeCount ? selection.getRangeAt(0).startContainer.parentElement : null;
+          parent?.scrollIntoView({ block: 'nearest' });
+        });
+      }}
+      data-placeholder={placeholder}
+      className={cn('note-body focus:outline-none', readOnly && 'cursor-default', className)}
+    />
   );
 }
