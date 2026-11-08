@@ -1,6 +1,7 @@
 package app.web.Stash;
 
 import android.os.Bundle;
+import android.view.ActionMode;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.ActionBar;
@@ -12,10 +13,11 @@ public class MainActivity extends BridgeActivity {
     /**
      * Register the plugins that are local to the app rather than shipped as npm
      * packages. Capacitor's own plugins register themselves from the generated
-     * plugin manifest; these four are small enough to live here, and keeping
+     * plugin manifest; these five are small enough to live here, and keeping
      * them local means the parts that touch Android-specific behaviour — the
-     * window flags, the incoming share, the Google token exchange and the
-     * native day/night mode — have no third-party dependency.
+     * window flags, the incoming share, the Google token exchange, the native
+     * day/night mode and the text-selection menu slot — have no third-party
+     * dependency.
      *
      * The share receiver needs no further wiring: registering it before
      * `super.onCreate` is enough, because Capacitor replays the launching intent
@@ -49,6 +51,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ShareReceiverPlugin.class);
         registerPlugin(GoogleAuthPlugin.class);
         registerPlugin(ThemeModePlugin.class);
+        registerPlugin(SelectionMenuPlugin.class);
         super.onCreate(savedInstanceState);
 
         /*
@@ -61,5 +64,32 @@ public class MainActivity extends BridgeActivity {
         if (actionBar != null) {
             actionBar.hide();
         }
+    }
+
+    /**
+     * Give the WebView's floating text-selection menu an action mode that draws
+     * nothing, while the note editor is the active surface.
+     *
+     * Returning `null` here — the obvious way to say "no menu" — does not do that.
+     * Android reads `null` as "the window should start one", which is why the
+     * native Cut / Copy bubble survives it. Answering with an object is what
+     * actually takes the slot, and Chromium requires a non-null answer anyway:
+     * with a null one it treats the selection as failed and clears it, handles
+     * and all.
+     *
+     * `SelectionMenuPlugin` carries the "only while editing the note body" part,
+     * because every other text surface in the app — the title, the link field,
+     * the search box — is an ordinary native input whose own Cut / Paste menu is
+     * the right UI and must keep working.
+     *
+     * `TYPE_PRIMARY` is left to the framework: it is the action-bar mode used by
+     * native widgets, and this app's ActionBar is deliberately absent.
+     */
+    @Override
+    public ActionMode onWindowStartingActionMode(ActionMode.Callback callback, int type) {
+        if (type == ActionMode.TYPE_FLOATING && SelectionMenuPlugin.isNativeMenuSuppressed()) {
+            return new EmptySelectionActionMode(this, callback);
+        }
+        return super.onWindowStartingActionMode(callback, type);
     }
 }

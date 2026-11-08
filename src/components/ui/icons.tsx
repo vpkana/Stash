@@ -23,6 +23,7 @@ import {
   Check as PhCheck,
   CheckCircle as PhCheckCircle,
   CircleNotch as PhCircleNotch,
+  ClipboardText as PhClipboardText,
   CloudArrowUp as PhCloudArrowUp,
   CloudCheck as PhCloudCheck,
   CloudSlash as PhCloudSlash,
@@ -78,6 +79,8 @@ import {
   Plus as PhPlus,
   Quotes as PhQuotes,
   RocketLaunch as PhRocketLaunch,
+  Scissors as PhScissors,
+  SelectionAll as PhSelectionAll,
   ShareNetwork as PhShareNetwork,
   Shield as PhShield,
   ShieldCheck as PhShieldCheck,
@@ -205,6 +208,9 @@ export const Link2Off = icon(PhLinkBreak, 'Link2Off');
 export const ExternalLink = icon(PhArrowSquareOut, 'ExternalLink');
 export const Share2 = icon(PhShareNetwork, 'Share2');
 export const Copy = icon(PhCopy, 'Copy');
+export const Scissors = icon(PhScissors, 'Scissors');
+export const ClipboardText = icon(PhClipboardText, 'ClipboardText');
+export const SelectionAll = icon(PhSelectionAll, 'SelectionAll');
 export const MapPin = icon(PhMapPin, 'MapPin');
 export const Clock = icon(PhClock, 'Clock');
 export const Star = icon(PhStar, 'Star');
