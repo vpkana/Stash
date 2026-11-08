@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AppBoot, BootGate, PrivacySession, ShareListener } from '@/components/providers';
 import { AppShell } from '@/components/app-shell';
+import { SelectionMenu } from '@/components/ui/selection-menu';
 import { SyncRuntime } from '@/components/sync/sync-runtime';
 import { GOOGLE_SYNC_ENABLED } from '@/lib/sync/availability';
 
@@ -60,6 +61,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <AppBoot>
           <BootGate>
             <PrivacySession />
+            {/*
+              Once, above every screen: the app's own Cut / Copy / Paste menu over
+              whatever selection the user has made — the note body, the note title,
+              a link's title field, a folder's rename field.
+            */}
+            <SelectionMenu />
             <ShareListener />
             {GOOGLE_SYNC_ENABLED ? <SyncRuntime /> : null}
             <AppShell>{children}</AppShell>

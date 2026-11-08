@@ -513,17 +513,40 @@
     border-color: var(--border);
   }
 
-  button,
-  [role='button'] {
+  /*
+   * Selection belongs to the thing being written, not to the app.
+   *
+   * Android answers any selection a page allows with its own handles and its own
+   * menu, and neither can be styled or placed. The app draws its own instead (see
+   * `SelectionMenu`), so selection is allowed exactly where text is edited — and
+   * nowhere else: a long press on a list row or a label no longer starts one. A
+   * note being read keeps its words selectable, because copying while reading is
+   * the point of being able to select at all.
+   */
+  html,
+  body {
     -webkit-user-select: none;
     user-select: none;
   }
 
   input,
-  textarea {
+  textarea,
+  [contenteditable='true'],
+  [data-surface='body'],
+  [data-selectable] {
     -webkit-user-select: text;
     user-select: text;
+  }
+
+  input,
+  textarea {
     font: inherit;
+  }
+
+  button,
+  [role='button'] {
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   ::selection {

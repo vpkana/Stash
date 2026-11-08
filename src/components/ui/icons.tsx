@@ -217,6 +217,11 @@ export const Star = icon(PhStar, 'Star');
 export const Tag = icon(PhTag, 'Tag');
 export const Clapperboard = icon(PhFilmSlate, 'Clapperboard');
 
+// --- The clipboard ----------------------------------------------------------
+export const Cut = icon(PhScissors, 'Cut');
+export const Paste = icon(PhClipboardText, 'Paste');
+export const SelectAll = icon(PhSelectionAll, 'SelectAll');
+
 // --- Notes and writing ------------------------------------------------------
 export const FilePlus2 = icon(PhFilePlus, 'FilePlus2');
 export const FileText = icon(PhFileText, 'FileText');
