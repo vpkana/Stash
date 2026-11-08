@@ -6,25 +6,42 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 /**
- * Tells the WebView whether Android's own selection menu should be suppressed.
+ * Tell the Android layer whether the web layer is currently editing a note body.
  *
- * The note editor draws its own bar over a selection, so it asks for the
- * platform's to be withheld while the body is the surface being edited — and
- * gives it back when the body is left, because the title, the search field and
- * the link field all still want the menu they have always had.
+ * The native Cut / Copy / Paste menu over a WebView selection is an
+ * {@code ActionMode} that Android builds for us. Stash draws its own selection
+ * toolbar in the note editor, so while the body is the active surface the native
+ * one has to stay away — but only there. The title, the link field and the search
+ * box are ordinary native inputs whose own paste menu is still the right UI, so
+ * the suppression is a flag the editor raises and lowers as the caret moves in
+ * and out of the body, not a global switch.
  *
- * Kept as a plugin rather than inferred natively because only the web layer
- * knows which of its many editable surfaces the selection belongs to; the
- * native side just holds the answer. See `StashWebView` for what suppression
- * actually does, and why it cannot be done by refusing the action mode outright.
+ * The flag is read by {@link MainActivity#onWindowStartingActionMode} on the UI
+ * thread and written from the plugin thread, hence {@code volatile}: the value
+ * only ever moves between "show the native menu" and "show none", so a torn read
+ * is not possible for a boolean, and a value that arrives a few milliseconds
+ * early or late only changes which of the two menus appears for that gesture.
  */
 @CapacitorPlugin(name = "SelectionMenu")
 public class SelectionMenuPlugin extends Plugin {
 
+    private static volatile boolean suppressed = false;
+
+    /** Read by the activity when Android asks it for a floating action mode. */
+    static boolean isNativeMenuSuppressed() {
+        return suppressed;
+    }
+
+    /**
+     * Set from the editor's focus / pointer events.
+     *
+     * `suppressed` is a request about *future* selections: it does not dismiss a
+     * menu that is already on screen, because the editor's own selection listener
+     * has already replaced that with its React toolbar.
+     */
     @PluginMethod
     public void setSuppressed(PluginCall call) {
-        Boolean suppressed = call.getBoolean("suppressed", Boolean.FALSE);
-        StashWebView.setSelectionMenuSuppressed(Boolean.TRUE.equals(suppressed));
+        suppressed = Boolean.TRUE.equals(call.getBoolean("suppressed", false));
         call.resolve();
     }
 }

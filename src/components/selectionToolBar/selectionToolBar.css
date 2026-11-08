@@ -1,0 +1,63 @@
+/*
+ * The floating selection toolbar.
+ *
+ * Position is written by the editor (viewport coordinates, already clamped to
+ * the viewport); this file owns only the surface. Every colour is a design
+ * token, so the toolbar is the app's own card in light and dark both — which is
+ * the point of replacing Android's: that one is themed by the *device*, not by
+ * the app, so it was a black slab over a light note whenever the two disagreed.
+ *
+ * `transform` inside the placement rules rather than inline styles so the
+ * toolbar can centre itself on the selection and sit above or below it without
+ * the editor having to know its own height.
+ */
+.selection-toolbar {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100vw - 1rem);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface) 95%, transparent);
+  box-shadow: var(--elevation-raised);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  white-space: nowrap;
+  animation: var(--animate-pop-in);
+}
+
+.selection-toolbar[data-placement='above'] {
+  transform: translate(-50%, calc(-100% - 10px));
+}
+
+.selection-toolbar[data-placement='below'] {
+  transform: translate(-50%, 10px);
+}
+
+.selection-toolbar-button {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  inline-size: 2.25rem;
+  block-size: 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-tap);
+  background: transparent;
+  color: var(--fg);
+}
+
+.selection-toolbar-button:active {
+  background-color: var(--surface-2);
+}
+
+.selection-toolbar-divider {
+  inline-size: 1px;
+  block-size: 1.15rem;
+  margin-inline: 2px;
+  background-color: var(--border);
+}
